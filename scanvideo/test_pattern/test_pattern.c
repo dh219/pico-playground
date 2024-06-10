@@ -21,8 +21,10 @@
 
 #include "psram_spi.h"
 #include "macaw.h"
+#include "screendump.h"
 
 #define vga_mode vga_mode_640x480_60
+//#define vga_mode vga_mode_320x240_60
 
 void core1_func();
 
@@ -33,6 +35,10 @@ void core1_func();
 // user input over USB or UART stdin, although all it does with it is invert the colors when you press SPACE
 
 #define PSRAM 0
+
+enum { _CHUNKY8, _BPP4 };
+
+static short mode = _BPP4;
 
 static semaphore_t video_initted;
 static bool invert;
@@ -85,6 +91,55 @@ static const uint16_t def_palette[256] = {
 
 uint16_t *palette;
 
+void makepix4bpp( uint8_t pix[16], uint64_t block ) {
+    // returns 16 nybles (8 bytes) for 16 pix translated from a 64 bit planar block
+
+    // pixel 1 is the sum of the first bit of each of the (4) words raised by two each time
+    for( int i = 0 ; i < 16 ; i++ ) {
+        pix[i] =    (( block>>i) & 0x1  ) | 
+                    ((( block>>16+i) & 0x1 ) << 1) |
+                    ((( block>>32+i) & 0x1 ) << 2) |
+                    ((( block>>48+i) & 0x1 ) << 3);
+    }
+}
+
+void p2c_4bpp( uint8_t *outpix, int pixels_to_convert, uint16_t *in ) {
+
+    uint8_t pix[16];
+    uint64_t *block = (void*)in;
+
+    for( int pixel = 0 ; pixel < pixels_to_convert ; pixel += 16 ) {
+        // pixel 1 is the sum of the first bit of each of the (4) words raised by two each time
+        for( int i = 0 ; i < 16 ; i++ ) {
+            pix[i] =    ((( *block>>i)  ) & 0x1 ) << 3  | 
+                        ((( *block>>16+i) & 0x1 ) << 2) |
+                        ((( *block>>32+i) & 0x1 ) << 1) |
+                        ((( *block>>48+i) & 0x1 ) << 0);
+        }
+/*        *(outpix++) = (pix[0] << 4) | pix[1];
+        *(outpix++) = (pix[2] << 4) | pix[3];
+        *(outpix++) = (pix[4] << 4) | pix[5];
+        *(outpix++) = (pix[6] << 4) | pix[7];
+        *(outpix++) = (pix[8] << 4) | pix[9];
+        *(outpix++) = (pix[10] << 4) | pix[11];
+        *(outpix++) = (pix[12] << 4) | pix[13];
+        *(outpix++) = (pix[14] << 4) | pix[15];        
+*/
+        for( int i = 7 ; i >= 0 ; i-- ) {
+            *(outpix++) = (pix[2*i] << 4) | pix[2*i+1];
+        }
+        block++;
+    }    
+
+}
+
+void draw_screendump() {
+    for( int i = 0 ; i < 640*200/2 ; i+=2) {
+        pixels[i] = screen_bin[i+1];
+        pixels[i+1] = screen_bin[i];
+    }
+}
+
 void draw_macaw() {
     for( int i = 0 ; i < X*Y ; i++ )
         pixels[i] = macaw[i];
@@ -96,6 +151,37 @@ void draw_palette(){
             pixels[X*i + j] = (int)( (16.0 * (float)j / (float)X) ) + 16*(int)(16.0 * (float)i / (float)Y);
         }
     }
+}
+
+void draw_test_pattern_4bpp() {
+    const int bytes_per_line = 320;
+
+    // clear screen to white    
+    memset( pixels, 0, bytes_per_line*Y );
+
+    // top half of screen in ST planar mode
+    for( int j = 0 ; j < Y/2 ; j++ ) {
+        int pixel_in_row = 0;
+        for( int i = 0 ; i < X ; i++ ) {
+            int pixel_in_row = i;
+            uint8_t pixel_colour = (16*pixel_in_row/640);
+
+            uint16_t *p = (uint16_t*)pixels;
+            p += j*bytes_per_line/2 + 4*(pixel_in_row/16);
+
+            *p |= ( ( pixel_colour )&0x1 ) << (pixel_in_row%16);
+            *(p+1) |= ( ( pixel_colour>>1 )&0x1 ) << (pixel_in_row%16);
+            *(p+2) |= ( ( pixel_colour>>2 )&0x1 ) << (pixel_in_row%16);
+            *(p+3) |= ( ( pixel_colour>>3 )&0x1 ) << (pixel_in_row%16);            
+
+        }
+
+    }
+
+    // bottom half to screen is copy of top, converted to 4bpp chunky
+    uint8_t *target = (pixels+(320*Y/2));
+    p2c_4bpp( target, X*Y/2, (uint16_t*)pixels );
+
 }
 
 int main(void) {
@@ -111,8 +197,12 @@ int main(void) {
         palette[i] = def_palette[i];
     }
 
-    draw_palette();
-
+    if( mode == _BPP4 )
+        //draw_test_pattern_4bpp();
+        draw_screendump();
+    else
+        draw_palette();
+    
     sleep_ms(5000);
 
     // create a semaphore to be posted when video init is complete
@@ -174,6 +264,12 @@ int main(void) {
         // a fixed tear a number of scanlines from the top. this is caused by pre-buffering of scanlines
         // and is too detailed a topic to fix here.
 
+        if( mode == _BPP4 ) {
+            // bottom half to screen is copy of top, converted to 4bpp chunky
+            uint8_t *target = (pixels+(320*Y/2));
+            p2c_4bpp( target, X*Y/2, (uint16_t*)pixels );
+        }
+
         scanvideo_wait_for_vblank();
 
         int c = getchar_timeout_us(0);
@@ -183,7 +279,10 @@ int main(void) {
                 printf("Mode: %d\n", invert);
                 if(invert)
                     draw_macaw();
-                else    
+                else if( mode == _BPP4 )
+                    //draw_test_pattern_4bpp();
+                    draw_screendump();
+                else
                     draw_palette();
                 break;
         }
@@ -278,7 +377,7 @@ void get_line_from_psram(scanvideo_scanline_buffer_t *buffer) {
 #endif
 }
 
-void get_line_from_ram(scanvideo_scanline_buffer_t *buffer) {
+void vga_640320_256_chunky(scanvideo_scanline_buffer_t *buffer ) {
 
     #define LINPIX 640
 
@@ -324,6 +423,130 @@ void get_line_from_ram(scanvideo_scanline_buffer_t *buffer) {
     buffer->status = SCANLINE_OK;
 }
 
+
+void vga_640320_16_planar(scanvideo_scanline_buffer_t *buffer) {
+
+    #define LINPIX 640
+
+    uint line_num = scanvideo_scanline_number(buffer->scanline_id);
+    uint16_t *p = (uint16_t *) buffer->data;
+
+#if 0
+
+    static uint32_t pixels[] = { 0x00, 0x00, 0x00, 0x00, 0x55, 0x55, 0x55, 0x55,
+                                0x00, 0x00, 0x00, 0x00, 0x55, 0x55, 0x55, 0x55,
+                                0x00, 0x00, 0x00, 0x00, 0x55, 0x55, 0x55, 0x55,
+                                0x00, 0x00, 0x00, 0x00, 0x55, 0x55, 0x55, 0x55,
+                                0x00, 0x00, 0x00, 0x00, 0x55, 0x55, 0x55, 0x55,
+                                0x00, 0x00, 0x00, 0x00, 0x55, 0x55, 0x55, 0x55,
+                                0x00, 0x00, 0x00, 0x00, 0x55, 0x55, 0x55, 0x55,
+                                0x00, 0x00, 0x00, 0x00, 0x55, 0x55, 0x55, 0x55,
+                                0x00, 0x00, 0x00, 0x00, 0x55, 0x55, 0x55, 0x55,
+                                0x00, 0x00, 0x00, 0x00, 0x55, 0x55, 0x55, 0x55,
+                                0x00, 0x00, 0x00, 0x00, 0x55, 0x55, 0x55, 0x55,
+                                0x00, 0x00, 0x00, 0x00, 0x55, 0x55, 0x55, 0x55,
+                                0x00, 0x00, 0x00, 0x00, 0x55, 0x55, 0x55, 0x55,
+                                0x00, 0x00, 0x00, 0x00, 0x55, 0x55, 0x55, 0x55,
+                                0x00, 0x00, 0x00, 0x00, 0x55, 0x55, 0x55, 0x55,
+                                0x00, 0x00, 0x00, 0x00, 0x55, 0x55, 0x55, 0x55,
+                                0x00, 0x00, 0x00, 0x00, 0x55, 0x55, 0x55, 0x55,
+                                0x00, 0x00, 0x00, 0x00, 0x55, 0x55, 0x55, 0x55,
+                                0x00, 0x00, 0x00, 0x00, 0x55, 0x55, 0x55, 0x55,
+                                0x00, 0x00, 0x00, 0x00, 0x55, 0x55, 0x55, 0x55,
+                                0x00, 0x00, 0x00, 0x00, 0x55, 0x55, 0x55, 0x55,
+                                0x00, 0x00, 0x00, 0x00, 0x55, 0x55, 0x55, 0x55,
+                                0x00, 0x00, 0x00, 0x00, 0x55, 0x55, 0x55, 0x55,
+                                0x00, 0x00, 0x00, 0x00, 0x55, 0x55, 0x55, 0x55,
+                                0x00, 0x00, 0x00, 0x00, 0x55, 0x55, 0x55, 0x55,
+                                0x00, 0x00, 0x00, 0x00, 0x55, 0x55, 0x55, 0x55,
+                                0x00, 0x00, 0x00, 0x00, 0x55, 0x55, 0x55, 0x55,
+                                0x00, 0x00, 0x00, 0x00, 0x55, 0x55, 0x55, 0x55,
+                                0x00, 0x00, 0x00, 0x00, 0x55, 0x55, 0x55, 0x55,
+                                0x00, 0x00, 0x00, 0x00, 0x55, 0x55, 0x55, 0x55,
+                                0x00, 0x00, 0x00, 0x00, 0x55, 0x55, 0x55, 0x55,
+                                0x00, 0x00, 0x00, 0x00, 0x55, 0x55, 0x55, 0x55,
+};
+
+//        uint32_t *src = (uint32_t*)(pixels+(line_num*X/2)); // 4bpp
+//        int offset = line_num*X/2;
+    int offset =0;
+
+    *p++ = COMPOSABLE_RAW_RUN;
+    *p++ = palette[2]; // red
+    *p++ = LINPIX - 3;
+    for( int i = 1 ; i < 16 ; i++ ) {
+        *p++ = palette[3]; // green
+    }
+    for( int j = 16 ; j < LINPIX ; j += 16) {
+/*
+        offset += 2;
+        for( int i = 0 ; i < 16 ; i++ ) {
+            *p++ = palette[ (( *(pixels+offset)>>i) & 0x1  ) + 
+                            (( *(pixels+offset)>>15+i) & 0x2 ) +
+                            (( *(pixels+offset+1)>>i)<<2 & 0x4 ) +
+                            (( *(pixels+offset+1)>>14+i) & 0x8 ) ];
+        }
+*/
+        offset += 2;
+        for( int i = 0 ; i < 16 ; i++ ) {
+            *p++ = palette[ (( *(pixels+offset)>>i) & 0x1  ) + 
+                            (( *(pixels+offset+1)>>15+i) & 0x2 ) +
+                            (( *(pixels+offset+2)>>i)<<2 & 0x4 ) +
+                            (( *(pixels+offset+3)>>14+i) & 0x8 ) ];
+        }
+    }
+
+#endif
+
+    line_num -= 80;
+    if( line_num < 0 || line_num >= 320 ) { // blank
+        *p++ = COMPOSABLE_COLOR_RUN;
+        *p++ = 0;
+        *p++ = X - 3;
+    }
+    else {
+        uint32_t colidx;
+        uint32_t *src = (uint32_t*)(pixels+(line_num*X/2)); // 4bpp
+
+        *p++ = COMPOSABLE_RAW_RUN;
+        
+        colidx = *src++;
+        *p++ = palette[colidx & 0xf];
+        *p++ = LINPIX - 3;
+        *p++ = palette[(colidx >> 4)&0xf];
+        *p++ = palette[(colidx >> 8)&0xf];
+        *p++ = palette[(colidx >> 12)&0xf];
+        *p++ = palette[(colidx >> 16)&0xf];
+        *p++ = palette[(colidx >> 20)&0xf];
+        *p++ = palette[(colidx >> 24)&0xf];
+        *p++ = palette[(colidx >> 28)&0xf];
+
+        for( int i = 8 ; i < LINPIX ; i+=8 ) {
+            colidx = *src++;            
+            *p++ = palette[colidx & 0xf];
+            *p++ = palette[(colidx >> 4)&0xf];
+            *p++ = palette[(colidx >> 8)&0xf];
+            *p++ = palette[(colidx >> 12)&0xf];
+            *p++ = palette[(colidx >> 16)&0xf];
+            *p++ = palette[(colidx >> 20)&0xf];
+            *p++ = palette[(colidx >> 24)&0xf];
+            *p++ = palette[(colidx >> 28)&0xf];
+        }
+    }
+
+
+    // black pixel to end line
+    *p++ = COMPOSABLE_RAW_1P;
+    *p++ = 0;
+    // end of line with alignment padding
+    *p++ = COMPOSABLE_EOL_SKIP_ALIGN;
+    *p++ = 0;
+
+    buffer->data_used = ((uint32_t *) p) - buffer->data;
+    buffer->status = SCANLINE_OK;
+}
+
+
 void core1_func() {
 
     // initialize video and interrupts on core 1
@@ -333,21 +556,13 @@ void core1_func() {
 
     while (true) {
         scanvideo_scanline_buffer_t *scanline_buffer = scanvideo_begin_scanline_generation(true);
-#if 0        
-        if( invert ) {
-            uint32_t line_begin = time_us_32();
-//            draw_color_bar(scanline_buffer);
-            get_line_from_psram(scanline_buffer);
-
-            uint32_t linediff = time_us_32() - line_begin;
-            linetimes[(scanline_buffer->scanline_id)&0xff] = linediff;
-        }
-        else 
-#endif
         {
-            
             uint32_t line_begin = time_us_32();
-            get_line_from_ram(scanline_buffer);
+            if( mode == _BPP4 )
+                vga_640320_16_planar(scanline_buffer);
+            else
+                vga_640320_256_chunky(scanline_buffer);
+
             uint32_t linediff = time_us_32() - line_begin;
             linetimes[(scanline_buffer->scanline_id)&0xff] = linediff;
         }

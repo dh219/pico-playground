@@ -11,7 +11,7 @@ if (TARGET pico_scanvideo_dpi)
             PSRAM_PIN_SCK=17
             PSRAM_PIN_MOSI=18
             PSRAM_PIN_MISO=19
-            PICO_SCANVIDEO_MAX_SCANLINE_BUFFER_WORDS=336
+            PICO_SCANVIDEO_MAX_SCANLINE_BUFFER_WORDS=360
     )
         
     target_link_libraries(test_pattern PRIVATE
