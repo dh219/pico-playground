@@ -50,59 +50,49 @@ static uint32_t linetimes[256];
 // my screenbuffer
 #define X 640
 #define Y 320
+//#define X 320
+//#define Y 200
 static uint8_t pixels[Y*X]; // max 640*320 = 204800 bytes
-uint8_t l = 0;
 
 static const uint16_t def_palette[256] = {
-    0x0fff,0x0fc0,0x00f0,0x0ff0,0x000f,0x0fcf,0x00ff,0x0bbb,
-    0x0888,0x0a80,0x00a0,0x0aa0,0x000a,0x0a8a,0x00aa,0x0000,
-    0x0fff,0x0eee,0x0ddd,0x0ccc,0x0bbb,0x0aaa,0x0999,0x0888,
-    0x0777,0x0666,0x0555,0x0444,0x0333,0x0222,0x0111,0x0000,
-    0x0fc0,0x0fc1,0x0fc2,0x0fc3,0x0fc4,0x0fc5,0x0fc6,0x0fc7,
-    0x0fc8,0x0fc9,0x0fca,0x0fcb,0x0fcc,0x0fcd,0x0fce,0x0fcf,
-    0x0ecf,0x0dcf,0x0ccf,0x0b8f,0x0a8f,0x098f,0x088f,0x074f,
-    0x064f,0x054f,0x044f,0x030f,0x020f,0x010f,0x000f,0x001f,
-    0x002f,0x003f,0x004f,0x005f,0x006f,0x007f,0x008f,0x009f,
-    0x00af,0x00bf,0x00cf,0x00df,0x00ef,0x00ff,0x00fe,0x00fd,
-    0x00fc,0x00fb,0x00fa,0x00f9,0x00f8,0x00f7,0x00f6,0x00f5,
-    0x00f4,0x00f3,0x00f2,0x00f1,0x00f0,0x01f0,0x02f0,0x03f0,
-    0x04f0,0x05f0,0x06f0,0x07f0,0x08f0,0x09f0,0x0af0,0x0bf0,
-    0x0cf0,0x0df0,0x0ef0,0x0ff0,0x0fe0,0x0fd0,0x0fc0,0x0ff0,
-    0x0fe0,0x0fd0,0x0fc0,0x0ff0,0x0fe0,0x0fd0,0x0fc0,0x0ff0,
-    0x0fe0,0x0fd0,0x0b80,0x0b81,0x0b82,0x0b83,0x0b84,0x0b85,
-    0x0b86,0x0b87,0x0b88,0x0b89,0x0b8a,0x0b8b,0x0a8b,0x098b,
-    0x088b,0x074b,0x064b,0x054b,0x044b,0x030b,0x020b,0x010b,
-    0x000b,0x001b,0x002b,0x003b,0x004b,0x005b,0x006b,0x007b,
-    0x008b,0x009b,0x00ab,0x00bb,0x00ba,0x00b9,0x00b8,0x00b7,
-    0x00b6,0x00b5,0x00b4,0x00b3,0x00b2,0x00b1,0x00b0,0x01b0,
-    0x02b0,0x03b0,0x04f0,0x05f0,0x06f0,0x07f0,0x08b0,0x09b0,
-    0x0ab0,0x0bb0,0x0ba0,0x0b90,0x0b80,0x0bf0,0x0be0,0x0bd0,
-    0x0bc0,0x0bb0,0x0ba0,0x0b90,0x0740,0x0741,0x0742,0x0743,
-    0x0744,0x0745,0x0746,0x0747,0x0647,0x0547,0x0447,0x0307,
-    0x0207,0x0107,0x0007,0x0017,0x0027,0x0037,0x0047,0x0057,
-    0x0067,0x0077,0x0076,0x0075,0x0074,0x0073,0x0072,0x0071,
-    0x0070,0x0170,0x0270,0x0370,0x0470,0x0570,0x0670,0x0770,
-    0x0760,0x0750,0x0740,0x0770,0x0760,0x0750,0x0440,0x0441,
-    0x0442,0x0443,0x0444,0x0304,0x0204,0x0104,0x0004,0x0014,
-    0x0024,0x0034,0x0044,0x0043,0x0042,0x0041,0x0040,0x0140,
-    0x0240,0x0340,0x0440,0x0470,0x0460,0x0450,0x0fff,0x0000
+0x0fff,0x000f,0x00f0,0x00ff,0x0f00,0x0f0f,0x0ff0,0x0bbb,
+0x0888,0x000a,0x00a0,0x00aa,0x0a00,0x0a0a,0x0aa0,0x0000,
+0x0fff,0x0eee,0x0ddd,0x0ccc,0x0bbb,0x0aaa,0x0999,0x0888,
+0x0777,0x0666,0x0555,0x0444,0x0333,0x0222,0x0111,0x0000,
+0x000f,0x010f,0x020f,0x030f,0x040f,0x050f,0x060f,0x070f,
+0x080f,0x090f,0x0a0f,0x0b0f,0x0c0f,0x0d0f,0x0e0f,0x0f0f,
+0x0f0e,0x0f0d,0x0f0c,0x0f0b,0x0f0a,0x0f09,0x0f08,0x0f07,
+0x0f06,0x0f05,0x0f04,0x0f03,0x0f02,0x0f01,0x0f00,0x0f10,
+0x0f20,0x0f30,0x0f40,0x0f50,0x0f60,0x0f70,0x0f80,0x0f90,
+0x0fa0,0x0fb0,0x0fc0,0x0fd0,0x0fe0,0x0ff0,0x0ef0,0x0df0,
+0x0cf0,0x0bf0,0x0af0,0x09f0,0x08f0,0x07f0,0x06f0,0x05f0,
+0x04f0,0x03f0,0x02f0,0x01f0,0x00f0,0x00f1,0x00f2,0x00f3,
+0x00f4,0x00f5,0x00f6,0x00f7,0x00f8,0x00f9,0x00fa,0x00fb,
+0x00fc,0x00fd,0x00fe,0x00ff,0x00ef,0x00df,0x00cf,0x00bf,
+0x00af,0x009f,0x008f,0x007f,0x006f,0x005f,0x004f,0x003f,
+0x002f,0x001f,0x000b,0x010b,0x020b,0x030b,0x040b,0x050b,
+0x060b,0x070b,0x080b,0x090b,0x0a0b,0x0b0b,0x0b0a,0x0b09,
+0x0b08,0x0b07,0x0b06,0x0b05,0x0b04,0x0b03,0x0b02,0x0b01,
+0x0b00,0x0b10,0x0b20,0x0b30,0x0b40,0x0b50,0x0b60,0x0b70,
+0x0b80,0x0b90,0x0ba0,0x0bb0,0x0ab0,0x09b0,0x08b0,0x07b0,
+0x06b0,0x05b0,0x04b0,0x03b0,0x02b0,0x01b0,0x00b0,0x00b1,
+0x00b2,0x00b3,0x00b4,0x00b5,0x00b6,0x00b7,0x00b8,0x00b9,
+0x00ba,0x00bb,0x00ab,0x009b,0x008b,0x007b,0x006b,0x005b,
+0x004b,0x003b,0x002b,0x001b,0x0007,0x0107,0x0207,0x0307,
+0x0407,0x0507,0x0607,0x0707,0x0706,0x0705,0x0704,0x0703,
+0x0702,0x0701,0x0700,0x0710,0x0720,0x0730,0x0740,0x0750,
+0x0760,0x0770,0x0670,0x0570,0x0470,0x0370,0x0270,0x0170,
+0x0070,0x0071,0x0072,0x0073,0x0074,0x0075,0x0076,0x0077,
+0x0067,0x0057,0x0047,0x0037,0x0027,0x0017,0x0004,0x0104,
+0x0204,0x0304,0x0404,0x0403,0x0402,0x0401,0x0400,0x0410,
+0x0420,0x0430,0x0440,0x0340,0x0240,0x0140,0x0040,0x0041,
+0x0042,0x0043,0x0044,0x0034,0x0024,0x0014,0x0fff,0x0000
+
 };
 
 
 
 uint16_t *palette;
-
-void makepix4bpp( uint8_t pix[16], uint64_t block ) {
-    // returns 16 nybles (8 bytes) for 16 pix translated from a 64 bit planar block
-
-    // pixel 1 is the sum of the first bit of each of the (4) words raised by two each time
-    for( int i = 0 ; i < 16 ; i++ ) {
-        pix[i] =    (( block>>i) & 0x1  ) | 
-                    ((( block>>16+i) & 0x1 ) << 1) |
-                    ((( block>>32+i) & 0x1 ) << 2) |
-                    ((( block>>48+i) & 0x1 ) << 3);
-    }
-}
 
 void p2c_4bpp( uint8_t *outpix, int pixels_to_convert, uint8_t *in ) {
 
@@ -117,41 +107,54 @@ void p2c_4bpp( uint8_t *outpix, int pixels_to_convert, uint8_t *in ) {
         plane[3] = *block++;
 
         // pixel 1 is the sum of the first bit of each of the (4) words raised by two each time
+
         for( int i = 0 ; i < 16 ; i++ ) {
-            pix[i] =    ((( plane[0]>>i) & 0x1 ) << 0) | 
+            pix[15-i] =    ((( plane[0]>>i) & 0x1 ) << 0) | 
                         ((( plane[1]>>i) & 0x1 ) << 1) |
                         ((( plane[2]>>i) & 0x1 ) << 2) |
                         ((( plane[3]>>i) & 0x1 ) << 3);
         }
-/*        *(outpix++) = (pix[0] << 4) | pix[1];
-        *(outpix++) = (pix[2] << 4) | pix[3];
-        *(outpix++) = (pix[4] << 4) | pix[5];
-        *(outpix++) = (pix[6] << 4) | pix[7];
-        *(outpix++) = (pix[8] << 4) | pix[9];
-        *(outpix++) = (pix[10] << 4) | pix[11];
-        *(outpix++) = (pix[12] << 4) | pix[13];
-        *(outpix++) = (pix[14] << 4) | pix[15];        
-*/
-        for( int i = 7 ; i >= 0 ; i-- ) {
-            *(outpix++) = (pix[2*i] << 4) | pix[2*i+1];
-        }
-/*
-        if( l == 100 && pixel == (0x2e0*2) ) {
-            printf("planes[] = %4.4x %4.4x %4.4x %4.4x\n", plane[0], plane[1], plane[2], plane[3] );
-            
-            printf("pix[0-15] = %x %x %x %x %x %x %x %x %x %x %x %x %x %x %x %x\n",
-                pix[0], pix[1], pix[2], pix[3], pix[4], pix[5], pix[6], pix[7], 
-                pix[8], pix[9], pix[10], pix[11], pix[12], pix[13], pix[14], pix[15] );
-        }*/
+//#define SWAP
+#ifdef SWAP
+        /* byteswap happens here*/
+        *(outpix++) = (pix[9] << 4) | pix[8];
+        *(outpix++) = (pix[11] << 4) | pix[10];
+        *(outpix++) = (pix[13] << 4) | pix[12];
+        *(outpix++) = (pix[15] << 4) | pix[14];
+
+        *(outpix++) = (pix[1] << 4) | pix[0];
+        *(outpix++) = (pix[3] << 4) | pix[2];
+        *(outpix++) = (pix[5] << 4) | pix[4];
+        *(outpix++) = (pix[7] << 4) | pix[6];
+#else
+        *(outpix++) = (pix[1] << 4) | pix[0];
+        *(outpix++) = (pix[3] << 4) | pix[2];
+        *(outpix++) = (pix[5] << 4) | pix[4];
+        *(outpix++) = (pix[7] << 4) | pix[6];
+
+        *(outpix++) = (pix[9] << 4) | pix[8];
+        *(outpix++) = (pix[11] << 4) | pix[10];
+        *(outpix++) = (pix[13] << 4) | pix[12];
+        *(outpix++) = (pix[15] << 4) | pix[14];
+#endif
     }    
 
 }
 
 void draw_screendump() {
-    for( int i = 0 ; i < 640*200/2 ; i+=2) {
-        pixels[i] = screen_bin[i+1];
-        pixels[i+1] = screen_bin[i];
+
+    for( int i = 1 ; i < sizeof(screen_bin) ; i+=2) {
+        pixels[i-1] = screen_bin[i];
+        pixels[i] = screen_bin[i-1];
     }
+/*
+    uint16_t *buffer = (void*)pixels;
+    uint16_t *src = (void*)screen_bin;
+
+    for( int i = 0 ; i < sizeof(screen_bin); i += 2) {
+        *buffer++ = *src++;
+    }
+*/
 }
 
 void draw_macaw() {
@@ -174,7 +177,78 @@ void draw_test_pattern_4bpp() {
     memset( pixels, 0, bytes_per_line*Y );
 
     // top half of screen in ST planar mode
-    for( int j = 0 ; j < Y/2 ; j++ ) {
+    for( int j = 0 ; j < Y/3 ; j++ ) {
+        int pixel_in_row = 0;
+        for( int i = 0 ; i < X ; i++ ) {
+            int pixel_in_row = i;
+            int shift = 15-(pixel_in_row%16);
+
+            uint8_t pixel_colour = (16*pixel_in_row/640);
+
+            
+            uint16_t *p = (uint16_t*)pixels;
+            p += j*bytes_per_line/2 + 4*(pixel_in_row/16);
+
+            *p     |= ( ( pixel_colour>>0 )&0x1 ) << (shift);
+            *(p+1) |= ( ( pixel_colour>>1 )&0x1 ) << (shift);
+            *(p+2) |= ( ( pixel_colour>>2 )&0x1 ) << (shift);
+            *(p+3) |= ( ( pixel_colour>>3 )&0x1 ) << (shift);                    
+
+        }
+
+    }
+    for( int j = Y/3 ; j < 2*Y/3 ; j++ ) {
+        int pixel_in_row = 0;
+
+
+
+        for( int i = 0 ; i < X ; i++ ) {
+            int pixel_in_row = i;
+            int shift = 15-(pixel_in_row%16);
+
+            uint8_t pixel_colour = (i/2) % 16;
+            
+            uint16_t *p = (uint16_t*)pixels;
+            p += j*bytes_per_line/2 + 4*(pixel_in_row/16);
+
+            *p     |= ( ( pixel_colour>>0 )&0x1 ) << (shift);
+            *(p+1) |= ( ( pixel_colour>>1 )&0x1 ) << (shift);
+            *(p+2) |= ( ( pixel_colour>>2 )&0x1 ) << (shift);
+            *(p+3) |= ( ( pixel_colour>>3 )&0x1 ) << (shift);            
+
+        }
+
+    }
+    for( int j = 2*Y/3 ; j < Y ; j++ ) {
+        int pixel_in_row = 0;
+
+        for( int i = 0 ; i < X ; i++ ) {
+            int pixel_in_row = i;
+            int shift = 15-(pixel_in_row%16);
+
+            uint8_t pixel_colour =  ( i / 16 ) % 16;
+            
+            uint16_t *p = (uint16_t*)pixels;
+            p += j*bytes_per_line/2 + 4*(pixel_in_row/16);
+
+            *p     |= ( ( pixel_colour>>0 )&0x1 ) << (shift);
+            *(p+1) |= ( ( pixel_colour>>1 )&0x1 ) << (shift);
+            *(p+2) |= ( ( pixel_colour>>2 )&0x1 ) << (shift);
+            *(p+3) |= ( ( pixel_colour>>3 )&0x1 ) << (shift);            
+
+        }
+
+    }
+}
+
+void draw_test_pattern_320200_4bpp() {
+    const int bytes_per_line = 160;
+
+    // clear screen to white    
+    memset( pixels, 0, bytes_per_line*Y );
+
+    // top half of screen in ST planar mode
+    for( int j = 0 ; j < Y ; j++ ) {
         int pixel_in_row = 0;
         for( int i = 0 ; i < X ; i++ ) {
             int pixel_in_row = i;
@@ -183,7 +257,7 @@ void draw_test_pattern_4bpp() {
             uint16_t *p = (uint16_t*)pixels;
             p += j*bytes_per_line/2 + 4*(pixel_in_row/16);
 
-            *p |= ( ( pixel_colour )&0x1 ) << (pixel_in_row%16);
+            *p     |= ( ( pixel_colour>>0 )&0x1 ) << (pixel_in_row%16);
             *(p+1) |= ( ( pixel_colour>>1 )&0x1 ) << (pixel_in_row%16);
             *(p+2) |= ( ( pixel_colour>>2 )&0x1 ) << (pixel_in_row%16);
             *(p+3) |= ( ( pixel_colour>>3 )&0x1 ) << (pixel_in_row%16);            
@@ -191,14 +265,11 @@ void draw_test_pattern_4bpp() {
         }
 
     }
-
-    // bottom half to screen is copy of top, converted to 4bpp chunky
-    uint8_t *target = (pixels+(320*Y/2));
-    p2c_4bpp( target, X*Y/2, pixels );
-
 }
 
 int main(void) {
+    static uint8_t l = 0;
+
     set_sys_clock_khz(250000, true);
 
     stdio_init_all();
@@ -212,8 +283,8 @@ int main(void) {
     }
 
     if( mode == _BPP4 )
-        //draw_test_pattern_4bpp();
-        draw_screendump();
+        draw_test_pattern_4bpp();
+        //draw_screendump();
     else
         draw_palette();
     
@@ -229,7 +300,7 @@ int main(void) {
     printf( "green = %4.4x\n", PICO_SCANVIDEO_PIXEL_FROM_RGB5(0x0, 0xf, 0x0) );
     printf( "blue =  %4.4x\n", PICO_SCANVIDEO_PIXEL_FROM_RGB5(0x0, 0x0, 0xf) );
 
-
+ 
 #if PSRAM
     puts("Initialising PSRAM...");
     psram_spi = psram_spi_init(pio1, -1);
@@ -279,25 +350,38 @@ int main(void) {
         // and is too detailed a topic to fix here.
 
         if( mode == _BPP4 ) {
-            // bottom half to screen is copy of top, converted to 4bpp chunky
-            uint8_t *target = (pixels+(320*Y/2));
-            p2c_4bpp( target, X*Y/2, pixels );
+            // bottom half of screenbuffer is copy of top, converted to 4bpp chunky
+            uint8_t *target = (pixels+(X*Y/2));
+            p2c_4bpp( target, X*Y, pixels );
         }
 
         scanvideo_wait_for_vblank();
 
         int c = getchar_timeout_us(0);
         switch (c) {
+            case 'b':
+                if( mode == _BPP4 )
+                    mode = _CHUNKY8;
+                else
+                    mode = _BPP4;
             case ' ':
                 invert = !invert;
                 printf("Mode: %d\n", invert);
-                if(invert)
-                    draw_macaw();
-                else if( mode == _BPP4 )
-                    //draw_test_pattern_4bpp();
-                    draw_screendump();
-                else
-                    draw_palette();
+                if( mode == _CHUNKY8 ) {
+                    if( invert )
+                        draw_macaw();
+                    else
+                        draw_palette();
+                }
+                else { // BPP4
+                    if(invert ) {
+                        draw_screendump();
+                    }
+                    else {
+                        draw_test_pattern_4bpp();
+                        //draw_test_pattern_320200_4bpp();
+                    }
+                }
                 break;
         }
 
@@ -437,7 +521,7 @@ void get_line_from_psram(scanvideo_scanline_buffer_t *buffer) {
 
 void vga_640320_256_chunky(scanvideo_scanline_buffer_t *buffer ) {
 
-    #define LINPIX 640
+    const int LINPIX=640;
 
     uint line_num = scanvideo_scanline_number(buffer->scanline_id);
     uint16_t *p = (uint16_t *) buffer->data;
@@ -484,7 +568,7 @@ void vga_640320_256_chunky(scanvideo_scanline_buffer_t *buffer ) {
 
 void vga_640320_16_planar(scanvideo_scanline_buffer_t *buffer) {
 
-    #define LINPIX 640
+    const int LINPIX=640;
 
     uint line_num = scanvideo_scanline_number(buffer->scanline_id);
     uint16_t *p = (uint16_t *) buffer->data;
@@ -496,14 +580,14 @@ void vga_640320_16_planar(scanvideo_scanline_buffer_t *buffer) {
         *p++ = X - 3;
     }
     else {
-#if 0
         uint32_t colidx;
-        uint32_t *src = (uint32_t*)(pixels+(line_num*X/2)); // 4bpp
+        uint32_t *src = (uint32_t*)(pixels+(X*Y/2)+(line_num*X/2)); // 4bpp -- two pix per byte, but second half of framebuffer (for background p2c)
+//        uint32_t *src = (uint32_t*)(pixels+(X*Y/4)+(line_num*X/2)); // 4bpp -- two pix per byte, but second half of framebuffer (for background p2c)
 
         *p++ = COMPOSABLE_RAW_RUN;
         
         colidx = *src++;
-        *p++ = palette[colidx & 0xf];
+        *p++ = palette[(colidx >> 0)&0xf];
         *p++ = LINPIX - 3;
         *p++ = palette[(colidx >> 4)&0xf];
         *p++ = palette[(colidx >> 8)&0xf];
@@ -515,7 +599,7 @@ void vga_640320_16_planar(scanvideo_scanline_buffer_t *buffer) {
 
         for( int i = 8 ; i < LINPIX ; i+=8 ) {
             colidx = *src++;            
-            *p++ = palette[colidx & 0xf];
+            *p++ = palette[(colidx >> 0)&0xf];
             *p++ = palette[(colidx >> 4)&0xf];
             *p++ = palette[(colidx >> 8)&0xf];
             *p++ = palette[(colidx >> 12)&0xf];
@@ -524,9 +608,36 @@ void vga_640320_16_planar(scanvideo_scanline_buffer_t *buffer) {
             *p++ = palette[(colidx >> 24)&0xf];
             *p++ = palette[(colidx >> 28)&0xf];
         }
-#else
-        uint8_t colidx;
-        uint8_t *src = (uint8_t*)(pixels+(line_num*X/2)); // 4bpp
+    }
+
+
+    // black pixel to end line
+    *p++ = COMPOSABLE_RAW_1P;
+    *p++ = 0;
+    // end of line with alignment padding
+    *p++ = COMPOSABLE_EOL_SKIP_ALIGN;
+    *p++ = 0;
+
+    buffer->data_used = ((uint32_t *) p) - buffer->data;
+    buffer->status = SCANLINE_OK;
+}
+
+void vga_320200_16_planar(scanvideo_scanline_buffer_t *buffer) {
+
+    const int LINPIX=320;
+
+    uint line_num = scanvideo_scanline_number(buffer->scanline_id);
+    uint16_t *p = (uint16_t *) buffer->data;
+
+    line_num -= 140;
+    if( line_num < 0 || line_num >= 140 ) { // blank
+        *p++ = COMPOSABLE_COLOR_RUN;
+        *p++ = 0;
+        *p++ = X - 3;
+    }
+    else {
+        uint32_t colidx;
+        uint32_t *src = (uint32_t*)(pixels+(X*Y/2)+(line_num*X/2)); // 4bpp -- two pix per byte, but second half of framebuffer (for background p2c)
 
         *p++ = COMPOSABLE_RAW_RUN;
         
@@ -534,13 +645,27 @@ void vga_640320_16_planar(scanvideo_scanline_buffer_t *buffer) {
         *p++ = palette[(colidx >> 0)&0xf];
         *p++ = LINPIX - 3;
         *p++ = palette[(colidx >> 4)&0xf];
+        *p++ = palette[(colidx >> 8)&0xf];
+        *p++ = palette[(colidx >> 12)&0xf];
+        *p++ = palette[(colidx >> 16)&0xf];
+        *p++ = palette[(colidx >> 20)&0xf];
+        *p++ = palette[(colidx >> 24)&0xf];
+        *p++ = palette[(colidx >> 28)&0xf];
 
-        for( int i = 2 ; i < LINPIX ; i+=2 ) {
+        for( int i = 8 ; i < LINPIX ; i+=8 ) {
             colidx = *src++;            
             *p++ = palette[(colidx >> 0)&0xf];
             *p++ = palette[(colidx >> 4)&0xf];
+            *p++ = palette[(colidx >> 8)&0xf];
+            *p++ = palette[(colidx >> 12)&0xf];
+            *p++ = palette[(colidx >> 16)&0xf];
+            *p++ = palette[(colidx >> 20)&0xf];
+            *p++ = palette[(colidx >> 24)&0xf];
+            *p++ = palette[(colidx >> 28)&0xf];
         }
-#endif
+        *p++ = COMPOSABLE_COLOR_RUN;
+        *p++ = 0;
+        *p++ = 640-X - 3;
     }
 
 
@@ -567,8 +692,10 @@ void core1_func() {
         scanvideo_scanline_buffer_t *scanline_buffer = scanvideo_begin_scanline_generation(true);
         {
             uint32_t line_begin = time_us_32();
-            if( mode == _BPP4 )
+            if( mode == _BPP4 ) {
                 vga_640320_16_planar(scanline_buffer);
+//                vga_320200_16_planar(scanline_buffer);
+            }
             else
                 vga_640320_256_chunky(scanline_buffer);
 
