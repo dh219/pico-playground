@@ -347,6 +347,12 @@ int main(void) {
     stdio_init_all();
     psram_ready = false;   
 
+    for( int i = 14 ; i <= 28 ; i++ ) {
+        gpio_init(i);
+        gpio_set_pulls ( i, true, false);
+    }
+    gpio_set_dir_in_masked(0xFFFFC000L);
+
     palette = malloc( 256 * sizeof( uint16_t ) );
     assert( palette );
 
@@ -476,51 +482,9 @@ int main(void) {
             avgt /= 256.0;
             printf("Average line time=%.3f us\n", avgt );
 
-            /*
-            uint32_t offset = 0x1400;
-            printf("pixel[%x]=%2.2x %2.2x %2.2x %2.2x %2.2x %2.2x %2.2x %2.2x %2.2x %2.2x %2.2x %2.2x %2.2x %2.2x %2.2x %2.2x\n",
-                offset,
-                pixels[offset+0],
-                pixels[offset+1],
-                pixels[offset+2],
-                pixels[offset+3],
-                pixels[offset+4],
-                pixels[offset+5],
-                pixels[offset+6],
-                pixels[offset+7],
-                pixels[offset+8],
-                pixels[offset+9],
-                pixels[offset+10],
-                pixels[offset+11],
-                pixels[offset+12],
-                pixels[offset+13],
-                pixels[offset+14],
-                pixels[offset+15]
-            );
-
-            offset = offset+320*Y/2;
-            printf("pixel[%x]=%2.2x %2.2x %2.2x %2.2x %2.2x %2.2x %2.2x %2.2x %2.2x %2.2x %2.2x %2.2x %2.2x %2.2x %2.2x %2.2x\n",
-                offset,
-                pixels[offset+0],
-                pixels[offset+1],
-                pixels[offset+2],
-                pixels[offset+3],
-                pixels[offset+4],
-                pixels[offset+5],
-                pixels[offset+6],
-                pixels[offset+7],
-                pixels[offset+8],
-                pixels[offset+9],
-                pixels[offset+10],
-                pixels[offset+11],
-                pixels[offset+12],
-                pixels[offset+13],
-                pixels[offset+14],
-                pixels[offset+15]
-            );
-            */
         }
-
+        uint32_t val = ( gpio_get_all() & 0xFFFFC000 ) >> 14; // we're already using bottom 14
+        printf("%lx\n", (~val)&0x7fff );
     }
 }
 
