@@ -23,8 +23,8 @@
 #include "macaw.h"
 #include "screendump.h"
 
-#define vga_mode vga_mode_640x480_60
-//#define vga_mode vga_mode_320x240_60
+//#define vga_mode vga_mode_640x480_60
+#define vga_mode vga_mode_320x240_60
 
 void core1_func();
 
@@ -36,9 +36,9 @@ void core1_func();
 
 #define PSRAM 0
 
-enum { _CHUNKY8, _BPP4 };
+enum { _CHUNKY8 = 0, _BPP4, _STLOW, _END };
 
-static short mode = _BPP4;
+static short mode = _STLOW;
 
 static semaphore_t video_initted;
 static bool invert;
@@ -48,10 +48,10 @@ static bool psram_ready;
 static uint32_t linetimes[256];
 
 // my screenbuffer
-#define X 640
-#define Y 320
-//#define X 320
-//#define Y 200
+//#define X 640
+//#define Y 320
+#define X 320
+#define Y 200
 static uint8_t pixels[Y*X]; // max 640*320 = 204800 bytes
 
 static const uint16_t def_palette[256] = {
@@ -141,20 +141,25 @@ void p2c_4bpp( uint8_t *outpix, int pixels_to_convert, uint8_t *in ) {
 
 }
 
-void draw_screendump() {
+void draw_screendump(int columns) {
 
-    for( int i = 1 ; i < sizeof(screen_bin) ; i+=2) {
-        pixels[i-1] = screen_bin[i];
-        pixels[i] = screen_bin[i-1];
-    }
-/*
-    uint16_t *buffer = (void*)pixels;
-    uint16_t *src = (void*)screen_bin;
+    if( columns < 80 ) {
+        int srcx, srcy;
+        uint8_t *dst = (uint8_t*)pixels;
 
-    for( int i = 0 ; i < sizeof(screen_bin); i += 2) {
-        *buffer++ = *src++;
+        for( srcy = 0 ; srcy < 200 ; srcy++ ) {
+            for( srcx = 0 ; srcx < 160 ; srcx+=2 ) {
+                *dst++ = screen_bin[1+srcx+(srcy*320)];
+                *dst++ = screen_bin[srcx+(srcy*320)];
+            }
+        }
     }
-*/
+    else {
+        for( int i = 1 ; i < sizeof(screen_bin) ; i+=2) {
+            pixels[i-1] = screen_bin[i];
+            pixels[i] = screen_bin[i-1];
+        }
+    }
 }
 
 void draw_macaw() {
@@ -241,26 +246,93 @@ void draw_test_pattern_4bpp() {
     }
 }
 
-void draw_test_pattern_320200_4bpp() {
+void draw_test_pattern_stlow() {
     const int bytes_per_line = 160;
 
     // clear screen to white    
     memset( pixels, 0, bytes_per_line*Y );
 
     // top half of screen in ST planar mode
-    for( int j = 0 ; j < Y ; j++ ) {
+    for( int j = 0 ; j < Y/4 ; j++ ) {
         int pixel_in_row = 0;
         for( int i = 0 ; i < X ; i++ ) {
             int pixel_in_row = i;
-            uint8_t pixel_colour = (16*pixel_in_row/640);
+            int shift = 15-(pixel_in_row%16);
 
+            uint8_t pixel_colour = (16*pixel_in_row/320);
+
+            
             uint16_t *p = (uint16_t*)pixels;
             p += j*bytes_per_line/2 + 4*(pixel_in_row/16);
 
-            *p     |= ( ( pixel_colour>>0 )&0x1 ) << (pixel_in_row%16);
-            *(p+1) |= ( ( pixel_colour>>1 )&0x1 ) << (pixel_in_row%16);
-            *(p+2) |= ( ( pixel_colour>>2 )&0x1 ) << (pixel_in_row%16);
-            *(p+3) |= ( ( pixel_colour>>3 )&0x1 ) << (pixel_in_row%16);            
+            *p     |= ( ( pixel_colour>>0 )&0x1 ) << (shift);
+            *(p+1) |= ( ( pixel_colour>>1 )&0x1 ) << (shift);
+            *(p+2) |= ( ( pixel_colour>>2 )&0x1 ) << (shift);
+            *(p+3) |= ( ( pixel_colour>>3 )&0x1 ) << (shift);                    
+
+        }
+
+    }
+    for( int j = Y/4 ; j < 2*Y/4 ; j++ ) {
+        int pixel_in_row = 0;
+
+
+
+        for( int i = 0 ; i < X ; i++ ) {
+            int pixel_in_row = i;
+            int shift = 15-(pixel_in_row%16);
+
+            uint8_t pixel_colour = (i/2) % 16;
+            
+            uint16_t *p = (uint16_t*)pixels;
+            p += j*bytes_per_line/2 + 4*(pixel_in_row/16);
+
+            *p     |= ( ( pixel_colour>>0 )&0x1 ) << (shift);
+            *(p+1) |= ( ( pixel_colour>>1 )&0x1 ) << (shift);
+            *(p+2) |= ( ( pixel_colour>>2 )&0x1 ) << (shift);
+            *(p+3) |= ( ( pixel_colour>>3 )&0x1 ) << (shift);            
+
+        }
+
+    }
+    for( int j = 2*Y/4 ; j < 3*Y/4 ; j++ ) {
+        int pixel_in_row = 0;
+
+        for( int i = 0 ; i < X ; i++ ) {
+            int pixel_in_row = i;
+            int shift = 15-(pixel_in_row%16);
+
+            uint8_t pixel_colour =  ( i / 16 ) % 16;
+            
+            uint16_t *p = (uint16_t*)pixels;
+            p += j*bytes_per_line/2 + 4*(pixel_in_row/16);
+
+            *p     |= ( ( pixel_colour>>0 )&0x1 ) << (shift);
+            *(p+1) |= ( ( pixel_colour>>1 )&0x1 ) << (shift);
+            *(p+2) |= ( ( pixel_colour>>2 )&0x1 ) << (shift);
+            *(p+3) |= ( ( pixel_colour>>3 )&0x1 ) << (shift);            
+
+        }
+
+    }
+    for( int j = 3*Y/4 ; j < 4*Y/4 ; j++ ) {
+        int pixel_in_row = 0;
+
+
+
+        for( int i = 0 ; i < X ; i++ ) {
+            int pixel_in_row = i;
+            int shift = 15-(pixel_in_row%16);
+
+            uint8_t pixel_colour = i % 16;
+            
+            uint16_t *p = (uint16_t*)pixels;
+            p += j*bytes_per_line/2 + 4*(pixel_in_row/16);
+
+            *p     |= ( ( pixel_colour>>0 )&0x1 ) << (shift);
+            *(p+1) |= ( ( pixel_colour>>1 )&0x1 ) << (shift);
+            *(p+2) |= ( ( pixel_colour>>2 )&0x1 ) << (shift);
+            *(p+3) |= ( ( pixel_colour>>3 )&0x1 ) << (shift);            
 
         }
 
@@ -285,6 +357,9 @@ int main(void) {
     if( mode == _BPP4 )
         draw_test_pattern_4bpp();
         //draw_screendump();
+    else if( mode == _STLOW ) {
+        draw_test_pattern_stlow();
+    }
     else
         draw_palette();
     
@@ -349,7 +424,7 @@ int main(void) {
         // a fixed tear a number of scanlines from the top. this is caused by pre-buffering of scanlines
         // and is too detailed a topic to fix here.
 
-        if( mode == _BPP4 ) {
+        if( mode == _BPP4 || _STLOW ) {
             // bottom half of screenbuffer is copy of top, converted to 4bpp chunky
             uint8_t *target = (pixels+(X*Y/2));
             p2c_4bpp( target, X*Y, pixels );
@@ -360,10 +435,9 @@ int main(void) {
         int c = getchar_timeout_us(0);
         switch (c) {
             case 'b':
-                if( mode == _BPP4 )
-                    mode = _CHUNKY8;
-                else
-                    mode = _BPP4;
+                mode++;
+                if( mode == _END )
+                    mode = 0;
             case ' ':
                 invert = !invert;
                 printf("Mode: %d\n", invert);
@@ -373,9 +447,17 @@ int main(void) {
                     else
                         draw_palette();
                 }
+                else if( _STLOW ) {
+                    if(invert ) {
+                        draw_screendump(40);
+                    }
+                    else {
+                        draw_test_pattern_stlow();
+                    }
+                }
                 else { // BPP4
                     if(invert ) {
-                        draw_screendump();
+                        draw_screendump(80);
                     }
                     else {
                         draw_test_pattern_4bpp();
@@ -629,8 +711,8 @@ void vga_320200_16_planar(scanvideo_scanline_buffer_t *buffer) {
     uint line_num = scanvideo_scanline_number(buffer->scanline_id);
     uint16_t *p = (uint16_t *) buffer->data;
 
-    line_num -= 140;
-    if( line_num < 0 || line_num >= 140 ) { // blank
+//    line_num -= 80;
+    if( line_num < 0 || line_num >= 200 ) { // blank
         *p++ = COMPOSABLE_COLOR_RUN;
         *p++ = 0;
         *p++ = X - 3;
@@ -694,7 +776,9 @@ void core1_func() {
             uint32_t line_begin = time_us_32();
             if( mode == _BPP4 ) {
                 vga_640320_16_planar(scanline_buffer);
-//                vga_320200_16_planar(scanline_buffer);
+            }
+            if( mode == _STLOW ) {
+                vga_320200_16_planar(scanline_buffer);
             }
             else
                 vga_640320_256_chunky(scanline_buffer);
