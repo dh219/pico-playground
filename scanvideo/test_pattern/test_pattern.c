@@ -339,6 +339,11 @@ void draw_test_pattern_stlow() {
     }
 }
 
+uint32_t get8bit() {
+    uint32_t val1 = ( gpio_get_all() >> 14 ) & 0xff;
+    return val1;
+}
+
 int main(void) {
     static uint8_t l = 0;
 
@@ -350,8 +355,16 @@ int main(void) {
     for( int i = 14 ; i <= 28 ; i++ ) {
         gpio_init(i);
         gpio_set_pulls ( i, true, false);
+        gpio_set_dir(i,false); // true is out
     }
-    gpio_set_dir_in_masked(0xFFFFC000L);
+    // actually GP22 is our OE pin, so set to out
+    gpio_set_dir( 22, true ); // true is out
+    gpio_put( 22, false ); // is true high?
+
+    // use 26 as clk
+    gpio_set_dir( 26, true ); // true is out
+    gpio_put( 26, false ); // is true high?
+
 
     palette = malloc( 256 * sizeof( uint16_t ) );
     assert( palette );
@@ -481,10 +494,16 @@ int main(void) {
             }
             avgt /= 256.0;
             printf("Average line time=%.3f us\n", avgt );
-
         }
-        uint32_t val = ( gpio_get_all() & 0xFFFFC000 ) >> 14; // we're already using bottom 14
-        printf("%lx\n", (~val)&0x7fff );
+        if( ( l % 60 ) == 0 ) {
+            gpio_put( 26, !gpio_get(26) ); // clock
+
+            uint32_t val = get8bit();
+
+            printf("%lx %8.8b %32.32b\n", val, val, val );
+        }
+        
+
     }
 }
 
