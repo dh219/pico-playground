@@ -27,6 +27,12 @@
 #define vga_mode vga_mode_320x240_60
 
 void core1_func();
+void draw_test_pattern_stlow();
+void draw_test_pattern_4bpp();
+void draw_palette();
+void draw_screendump(int);
+void draw_macaw();
+void p2c_4bpp( uint8_t *outpix, int pixels_to_convert, uint8_t *in );
 
 // Simple color bar program, which draws 7 colored bars: red, green, yellow, blow, magenta, cyan, white
 // Can be used to check resister DAC correctness.
@@ -93,6 +99,276 @@ static const uint16_t def_palette[256] = {
 
 
 uint16_t *palette;
+
+
+#define STROBE(x) gpio_put(22,x)
+#define RTS(x) (!((x >> 26 ) & 0x1))
+#define DATA(x) (( x >> 14 ) & 0xff )
+
+int main(void) {
+    static uint8_t l = 0;
+
+    set_sys_clock_khz(250000, true);
+
+    stdio_init_all();
+    psram_ready = false;   
+
+    for( int i = 14 ; i <= 28 ; i++ ) {
+        gpio_init(i);
+        gpio_set_pulls ( i, true, false);
+        gpio_set_dir(i,false); // true is out
+    }
+    // actually GP22 is our strobe pin, so set to out
+    gpio_set_dir( 22, true ); // true is out
+//    gpio_put( 22, false ); // is true high?
+    STROBE(1);
+
+
+    palette = malloc( 256 * sizeof( uint16_t ) );
+    assert( palette );
+
+    for( int i = 0 ; i < 256 ; i++ ) {
+        palette[i] = def_palette[i];
+    }
+
+    if( mode == _BPP4 )
+        draw_test_pattern_4bpp();
+        //draw_screendump();
+    else if( mode == _STLOW ) {
+        draw_test_pattern_stlow();
+    }
+    else
+        draw_palette();
+    
+    sleep_ms(5000);
+
+    // create a semaphore to be posted when video init is complete
+    sem_init(&video_initted, 0, 1);
+
+    // launch all the video on core 1, so it isn't affected by USB handling on core 0
+    multicore_launch_core1(core1_func);
+
+    printf( "red =   %4.4x\n", PICO_SCANVIDEO_PIXEL_FROM_RGB5(0xf, 0x0, 0x0) );
+    printf( "green = %4.4x\n", PICO_SCANVIDEO_PIXEL_FROM_RGB5(0x0, 0xf, 0x0) );
+    printf( "blue =  %4.4x\n", PICO_SCANVIDEO_PIXEL_FROM_RGB5(0x0, 0x0, 0xf) );
+
+ 
+#if PSRAM
+    puts("Initialising PSRAM...");
+    psram_spi = psram_spi_init(pio1, -1);
+    puts("PSRAM init complete.");
+    psram_ready = true;
+
+    // **************** 16 bits testing ****************
+
+    uint32_t sz = 1280;
+    const char *sizestr = "1280 bytes";
+    uint32_t psram_begin = time_us_32();
+    for (uint32_t addr = 0; addr < (sz); addr += 2) {
+        psram_write16(&psram_spi, addr, (((addr + 1) & 0xFF) << 8) | (addr & 0xFF));
+    }
+    uint32_t psram_elapsed = time_us_32() - psram_begin;
+    float psram_speed = sz / psram_elapsed;
+    printf("16 bit: PSRAM write %s in %d us, %.1f MB/s\n", sizestr, psram_elapsed, (float)psram_speed);
+
+    psram_begin = time_us_32();
+    for (uint32_t addr = 0; addr < (sz); addr += 2) {
+        uint16_t result = psram_read16(&psram_spi, addr);
+        if ((uint16_t)(
+                (((addr + 1) & 0xFF) << 8) |
+                (addr & 0xFF)) != result
+        ) {
+            printf("PSRAM failure at address %x (%x != %x) ", addr, (
+                (((addr + 1) & 0xFF) << 8) |
+                (addr & 0xFF)), result
+            );
+            return 1;
+        }
+    }
+    psram_elapsed = (time_us_32() - psram_begin);
+    psram_speed = sz / psram_elapsed;
+    printf("16 bit: PSRAM read %s in %d us, %.1f MB/s\n", sizestr, psram_elapsed, (float)psram_speed);
+#endif
+
+    // wait for initialization of video to be complete
+    sem_acquire_blocking(&video_initted);
+
+    puts("Color bars ready, press SPACE to invert...");
+
+    uint8_t *target = (pixels+(X*Y/2));
+    p2c_4bpp( target, X*Y, pixels );
+
+
+    while (false) {
+        // prevent tearing when we invert - if you're astute you'll notice this actually causes
+        // a fixed tear a number of scanlines from the top. this is caused by pre-buffering of scanlines
+        // and is too detailed a topic to fix here.
+
+        if( mode == _BPP4 || _STLOW ) {
+            // bottom half of screenbuffer is copy of top, converted to 4bpp chunky
+            uint8_t *target = (pixels+(X*Y/2));
+            p2c_4bpp( target, X*Y, pixels );
+        }
+
+        scanvideo_wait_for_vblank();
+
+        int c = getchar_timeout_us(0);
+        switch (c) {
+            case 'b':
+                mode++;
+                if( mode == _END )
+                    mode = 0;
+            case ' ':
+                invert = !invert;
+                printf("Mode: %d\n", invert);
+                if( mode == _CHUNKY8 ) {
+                    if( invert )
+                        draw_macaw();
+                    else
+                        draw_palette();
+                }
+                else if( _STLOW ) {
+                    if(invert ) {
+                        draw_screendump(40);
+                    }
+                    else {
+                        draw_test_pattern_stlow();
+                    }
+                }
+                else { // BPP4
+                    if(invert ) {
+                        draw_screendump(80);
+                    }
+                    else {
+                        draw_test_pattern_4bpp();
+                        //draw_test_pattern_320200_4bpp();
+                    }
+                }
+                break;
+        }
+
+        l++;
+        if( l == 100 ) {
+            float avgt = 0;
+            for( int i = 0 ; i < 256 ; i++ ) {
+                avgt += linetimes[i];
+            }
+            avgt /= 256.0;
+            printf("Average line time=%.3f us\n", avgt );
+        }
+        if( ( l % 60 ) == 0 ) {
+            gpio_put( 26, !gpio_get(26) ); // clock
+
+            uint32_t val = DATA( gpio_get_all() );
+
+            printf("%lx %8.8b %32.32b\n", val, val, val );
+        }
+        
+
+    }
+
+    uint16_t data;
+    uint32_t addr;
+    uint32_t val;
+    uint8_t *targetbase = (pixels+(X*Y/2));
+//    uint8_t *target;
+    while(true){
+        
+        val = gpio_get_all();
+
+        if( RTS(val) ) {
+            STROBE(0);
+            __asm volatile ("nop":);
+            STROBE(1);
+            __asm volatile ("nop":);
+            __asm volatile ("nop":);
+            __asm volatile ("nop":);
+            __asm volatile ("nop":);
+            __asm volatile ("nop":);
+            __asm volatile ("nop":);
+            __asm volatile ("nop":);
+            __asm volatile ("nop":);
+            addr = 0;
+            val = gpio_get_all();
+            addr |= DATA(val);
+
+            STROBE(0);
+            __asm volatile ("nop":);
+            STROBE(1);
+            __asm volatile ("nop":);
+            __asm volatile ("nop":);
+            __asm volatile ("nop":);
+            __asm volatile ("nop":);
+            __asm volatile ("nop":);
+            __asm volatile ("nop":);
+            __asm volatile ("nop":);
+            __asm volatile ("nop":);
+            addr <<= 8;
+            val = gpio_get_all();
+            addr |= DATA(val);
+            __asm volatile ("nop":);
+
+            STROBE(0);
+            __asm volatile ("nop":);
+            STROBE(1);
+            __asm volatile ("nop":);
+            __asm volatile ("nop":);
+            __asm volatile ("nop":);
+            __asm volatile ("nop":);
+            __asm volatile ("nop":);
+            __asm volatile ("nop":);
+            __asm volatile ("nop":);
+            __asm volatile ("nop":);
+            addr <<= 8;
+            val = gpio_get_all();
+            addr |= DATA(val);
+            __asm volatile ("nop":);
+
+
+            STROBE(0);
+            __asm volatile ("nop":);
+            STROBE(1);
+            __asm volatile ("nop":);
+            __asm volatile ("nop":);
+            __asm volatile ("nop":);
+            __asm volatile ("nop":);
+            __asm volatile ("nop":);
+            __asm volatile ("nop":);
+            __asm volatile ("nop":);
+            __asm volatile ("nop":);
+            data = 0;
+            val = gpio_get_all();
+            data |= DATA(val);
+
+            STROBE(0);
+            __asm volatile ("nop":);
+            STROBE(1);
+            __asm volatile ("nop":);
+            __asm volatile ("nop":);
+            __asm volatile ("nop":);
+            __asm volatile ("nop":);
+            __asm volatile ("nop":);
+            __asm volatile ("nop":);
+            __asm volatile ("nop":);
+            __asm volatile ("nop":);
+            data <<= 8;
+            val = gpio_get_all();
+            data |= DATA(val);
+
+            STROBE(0);
+            __asm volatile ("nop":);
+            STROBE(1);
+
+            printf("%6.6x: %4.4x\n", addr, data );
+            if( addr >= 0x078000 && addr < 0x07fd00)  {
+                target = targetbase + (addr-0x078000);
+                *target++ = ( data & 0xff );
+                *target = ( data >> 8 ) & 0xff;
+            }
+        }
+    }
+
+}
 
 void p2c_4bpp( uint8_t *outpix, int pixels_to_convert, uint8_t *in ) {
 
@@ -339,173 +615,6 @@ void draw_test_pattern_stlow() {
     }
 }
 
-uint32_t get8bit() {
-    uint32_t val1 = ( gpio_get_all() >> 14 ) & 0xff;
-    return val1;
-}
-
-int main(void) {
-    static uint8_t l = 0;
-
-    set_sys_clock_khz(250000, true);
-
-    stdio_init_all();
-    psram_ready = false;   
-
-    for( int i = 14 ; i <= 28 ; i++ ) {
-        gpio_init(i);
-        gpio_set_pulls ( i, true, false);
-        gpio_set_dir(i,false); // true is out
-    }
-    // actually GP22 is our OE pin, so set to out
-    gpio_set_dir( 22, true ); // true is out
-    gpio_put( 22, false ); // is true high?
-
-    // use 26 as clk
-    gpio_set_dir( 26, true ); // true is out
-    gpio_put( 26, false ); // is true high?
-
-
-    palette = malloc( 256 * sizeof( uint16_t ) );
-    assert( palette );
-
-    for( int i = 0 ; i < 256 ; i++ ) {
-        palette[i] = def_palette[i];
-    }
-
-    if( mode == _BPP4 )
-        draw_test_pattern_4bpp();
-        //draw_screendump();
-    else if( mode == _STLOW ) {
-        draw_test_pattern_stlow();
-    }
-    else
-        draw_palette();
-    
-    sleep_ms(5000);
-
-    // create a semaphore to be posted when video init is complete
-    sem_init(&video_initted, 0, 1);
-
-    // launch all the video on core 1, so it isn't affected by USB handling on core 0
-    multicore_launch_core1(core1_func);
-
-    printf( "red =   %4.4x\n", PICO_SCANVIDEO_PIXEL_FROM_RGB5(0xf, 0x0, 0x0) );
-    printf( "green = %4.4x\n", PICO_SCANVIDEO_PIXEL_FROM_RGB5(0x0, 0xf, 0x0) );
-    printf( "blue =  %4.4x\n", PICO_SCANVIDEO_PIXEL_FROM_RGB5(0x0, 0x0, 0xf) );
-
- 
-#if PSRAM
-    puts("Initialising PSRAM...");
-    psram_spi = psram_spi_init(pio1, -1);
-    puts("PSRAM init complete.");
-    psram_ready = true;
-
-    // **************** 16 bits testing ****************
-
-    uint32_t sz = 1280;
-    const char *sizestr = "1280 bytes";
-    uint32_t psram_begin = time_us_32();
-    for (uint32_t addr = 0; addr < (sz); addr += 2) {
-        psram_write16(&psram_spi, addr, (((addr + 1) & 0xFF) << 8) | (addr & 0xFF));
-    }
-    uint32_t psram_elapsed = time_us_32() - psram_begin;
-    float psram_speed = sz / psram_elapsed;
-    printf("16 bit: PSRAM write %s in %d us, %.1f MB/s\n", sizestr, psram_elapsed, (float)psram_speed);
-
-    psram_begin = time_us_32();
-    for (uint32_t addr = 0; addr < (sz); addr += 2) {
-        uint16_t result = psram_read16(&psram_spi, addr);
-        if ((uint16_t)(
-                (((addr + 1) & 0xFF) << 8) |
-                (addr & 0xFF)) != result
-        ) {
-            printf("PSRAM failure at address %x (%x != %x) ", addr, (
-                (((addr + 1) & 0xFF) << 8) |
-                (addr & 0xFF)), result
-            );
-            return 1;
-        }
-    }
-    psram_elapsed = (time_us_32() - psram_begin);
-    psram_speed = sz / psram_elapsed;
-    printf("16 bit: PSRAM read %s in %d us, %.1f MB/s\n", sizestr, psram_elapsed, (float)psram_speed);
-#endif
-
-    // wait for initialization of video to be complete
-    sem_acquire_blocking(&video_initted);
-
-    puts("Color bars ready, press SPACE to invert...");
-
-
-    while (true) {
-        // prevent tearing when we invert - if you're astute you'll notice this actually causes
-        // a fixed tear a number of scanlines from the top. this is caused by pre-buffering of scanlines
-        // and is too detailed a topic to fix here.
-
-        if( mode == _BPP4 || _STLOW ) {
-            // bottom half of screenbuffer is copy of top, converted to 4bpp chunky
-            uint8_t *target = (pixels+(X*Y/2));
-            p2c_4bpp( target, X*Y, pixels );
-        }
-
-        scanvideo_wait_for_vblank();
-
-        int c = getchar_timeout_us(0);
-        switch (c) {
-            case 'b':
-                mode++;
-                if( mode == _END )
-                    mode = 0;
-            case ' ':
-                invert = !invert;
-                printf("Mode: %d\n", invert);
-                if( mode == _CHUNKY8 ) {
-                    if( invert )
-                        draw_macaw();
-                    else
-                        draw_palette();
-                }
-                else if( _STLOW ) {
-                    if(invert ) {
-                        draw_screendump(40);
-                    }
-                    else {
-                        draw_test_pattern_stlow();
-                    }
-                }
-                else { // BPP4
-                    if(invert ) {
-                        draw_screendump(80);
-                    }
-                    else {
-                        draw_test_pattern_4bpp();
-                        //draw_test_pattern_320200_4bpp();
-                    }
-                }
-                break;
-        }
-
-        l++;
-        if( l == 100 ) {
-            float avgt = 0;
-            for( int i = 0 ; i < 256 ; i++ ) {
-                avgt += linetimes[i];
-            }
-            avgt /= 256.0;
-            printf("Average line time=%.3f us\n", avgt );
-        }
-        if( ( l % 60 ) == 0 ) {
-            gpio_put( 26, !gpio_get(26) ); // clock
-
-            uint32_t val = get8bit();
-
-            printf("%lx %8.8b %32.32b\n", val, val, val );
-        }
-        
-
-    }
-}
 
 void draw_color_bar(scanvideo_scanline_buffer_t *buffer) {
     // figure out 1/32 of the color value
