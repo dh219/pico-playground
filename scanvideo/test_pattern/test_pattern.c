@@ -33,6 +33,7 @@ void draw_palette();
 void draw_screendump(int);
 void draw_macaw();
 void p2c_4bpp( uint8_t *outpix, int pixels_to_convert, uint8_t *in );
+void padd( int add );
 
 // Simple color bar program, which draws 7 colored bars: red, green, yellow, blow, magenta, cyan, white
 // Can be used to check resister DAC correctness.
@@ -101,8 +102,14 @@ static const uint16_t def_palette[256] = {
 uint16_t *palette;
 
 
-#define STROBE(x) gpio_put(22,x)
-#define RTS(x) (!((x >> 26 ) & 0x1))
+//#define STROBE(x) gpio_put(22,x)
+#define STROBE(x)
+
+#define PADD0(x) gpio_put(26,x)
+#define PADD1(x) gpio_put(27,x)
+#define PADD2(x) gpio_put(28,x)
+
+#define RTS(x) (!((x >> 22 ) & 0x1))
 #define DATA(x) (( x >> 14 ) & 0xff )
 
 int main(void) {
@@ -113,14 +120,17 @@ int main(void) {
     stdio_init_all();
     psram_ready = false;   
 
+    /* pin map */
+    /* GPIO 14-21 are data lines (input) */
+    /* GPIO is RTS (input) */
+    /* GPIO 26-28 are multiplex address (output) */
+
     for( int i = 14 ; i <= 28 ; i++ ) {
         gpio_init(i);
         gpio_set_pulls ( i, true, false);
         gpio_set_dir(i,false); // true is out
     }
-    // actually GP22 is our strobe pin, so set to out
-    gpio_set_dir( 22, true ); // true is out
-//    gpio_put( 22, false ); // is true high?
+
     STROBE(1);
 
 
@@ -270,13 +280,19 @@ int main(void) {
     uint16_t data;
     uint32_t addr;
     uint32_t val;
-    uint8_t *targetbase = (pixels+(X*Y/2));
+    uint8_t *targetbase = pixels;//(pixels+(X*Y/2));
 //    uint8_t *target;
+    uint32_t counter = 0;
+
+    padd(-1);
     while(true){
-        
+
         val = gpio_get_all();
 
+
+
         if( RTS(val) ) {
+            /*
             STROBE(0);
             __asm volatile ("nop":);
             STROBE(1);
@@ -358,16 +374,98 @@ int main(void) {
             STROBE(0);
             __asm volatile ("nop":);
             STROBE(1);
+*/
 
+            padd( 0 );
+            val = gpio_get_all();
+            val = gpio_get_all();
+            val = gpio_get_all();
+            printf("0: %x\n", DATA(val) );
+
+            padd( 1 );
+            val = gpio_get_all();
+            val = gpio_get_all();
+            val = gpio_get_all();
+            printf("1: %x\n", DATA(val) );
+
+            padd( 2 );
+            val = gpio_get_all();
+            val = gpio_get_all();
+            val = gpio_get_all();
+            printf("2: %x\n", DATA(val) );
+
+            padd( 3 );
+            val = gpio_get_all();
+            val = gpio_get_all();
+            val = gpio_get_all();
+            printf("3: %x\n", DATA(val) );
+
+            padd( 4 );
+            val = gpio_get_all();
+            val = gpio_get_all();
+            val = gpio_get_all();
+            printf("4: %x\n", DATA(val) );
+
+            padd( 5 );
+            val = gpio_get_all();
+            val = gpio_get_all();
+            val = gpio_get_all();
+            printf("5: %x\n", DATA(val) );
+
+            padd( 6 );
+            val = gpio_get_all();
+            val = gpio_get_all();
+            val = gpio_get_all();
+            printf("6: %x\n", DATA(val) );
+
+            padd( 7 );
+            val = gpio_get_all();
+            val = gpio_get_all();
+            val = gpio_get_all();
+            printf("7: %x\n", DATA(val) );
+
+            padd(-1);
+
+
+/*
             printf("%6.6x: %4.4x\n", addr, data );
-            if( addr >= 0x078000 && addr < 0x07fd00)  {
-                target = targetbase + (addr-0x078000);
+            if( addr >= 0x300000 && addr < 0x37fd00)  {
+                target = pixels + (addr-0x300000);
+
+                printf("Writing %2.2x to offset %p\n", data, addr-0x300000 );
+
                 *target++ = ( data & 0xff );
                 *target = ( data >> 8 ) & 0xff;
             }
+*/
         }
+
+        if( counter++ == 0x08000000 ) {
+            printf("P2C\n");
+            target = pixels + (X*Y/2);
+            p2c_4bpp( target, X*Y, pixels );
+            counter = 0;
+        }
+
     }
 
+}
+
+void padd( int add ) {
+    if( add < 0 ) {
+        gpio_set_dir( 26, false ); // true is out
+        gpio_set_dir( 27, false ); // true is out
+        gpio_set_dir( 28, false ); // true is out
+    }
+    else {
+        PADD0( (add>>0)&0x1 );
+        PADD1( (add>>1)&0x1 );
+        PADD2( (add>>2)&0x1 );
+
+        gpio_set_dir( 26, true ); // true is out
+        gpio_set_dir( 27, true ); // true is out
+        gpio_set_dir( 28, true ); // true is out
+    }
 }
 
 void p2c_4bpp( uint8_t *outpix, int pixels_to_convert, uint8_t *in ) {
