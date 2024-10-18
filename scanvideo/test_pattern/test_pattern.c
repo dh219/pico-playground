@@ -102,9 +102,6 @@ static const uint16_t def_palette[256] = {
 uint16_t *palette;
 
 
-//#define STROBE(x) gpio_put(22,x)
-#define STROBE(x)
-
 #define PADD0(x) gpio_put(26,x)
 #define PADD1(x) gpio_put(27,x)
 #define PADD2(x) gpio_put(28,x)
@@ -130,8 +127,6 @@ int main(void) {
         gpio_set_pulls ( i, true, false);
         gpio_set_dir(i,false); // true is out
     }
-
-    STROBE(1);
 
 
     palette = malloc( 256 * sizeof( uint16_t ) );
@@ -285,160 +280,107 @@ int main(void) {
     uint32_t counter = 0;
 
     padd(-1);
+
+    uint32_t buf[8];
+    int c;
+
+    uint32_t startt, endt;
+
     while(true){
 
         val = gpio_get_all();
+#if 0
+        if(RTS(val)) {
+            c = 0;
+            buf[c++] = DATA(val);
+            val = gpio_get_all();
+            buf[c++] = DATA(val);
+            padd(0);
+            val = gpio_get_all();
+            buf[c++] = DATA(val);
+            val = gpio_get_all();
+            buf[c++] = DATA(val);
+            val = gpio_get_all();
+            buf[c++] = DATA(val);
+            val = gpio_get_all();
+            buf[c++] = DATA(val);
+            val = gpio_get_all();
+            buf[c++] = DATA(val);
+            val = gpio_get_all();
+            buf[c++] = DATA(val);
+            val = gpio_get_all();
+            buf[c++] = DATA(val);
+            val = gpio_get_all();
+            buf[c++] = DATA(val);
+            padd(7);
+            padd(-1);
+            val = gpio_get_all();
+            hist[c++] = DATA(val);
+            val = gpio_get_all();
+            hist[c++] = DATA(val);
 
 
-
+            for( int i = 0 ; i < c ; i++ ) {
+                printf("%d: %x\n", i, hist[i] );
+            }
+            printf("\n");
+        }
+#endif
+#if 1
+        startt = to_us_since_boot(get_absolute_time());
         if( RTS(val) ) {
+
+            padd(0);
+            __asm volatile ("nop\n");
+            padd(7);
+            __asm volatile ("nop\n");
+            padd(-1);
             /*
-            STROBE(0);
-            __asm volatile ("nop":);
-            STROBE(1);
-            __asm volatile ("nop":);
-            __asm volatile ("nop":);
-            __asm volatile ("nop":);
-            __asm volatile ("nop":);
-            __asm volatile ("nop":);
-            __asm volatile ("nop":);
-            __asm volatile ("nop":);
-            __asm volatile ("nop":);
+
+            c = 0;
             addr = 0;
-            val = gpio_get_all();
-            addr |= DATA(val);
-
-            STROBE(0);
-            __asm volatile ("nop":);
-            STROBE(1);
-            __asm volatile ("nop":);
-            __asm volatile ("nop":);
-            __asm volatile ("nop":);
-            __asm volatile ("nop":);
-            __asm volatile ("nop":);
-            __asm volatile ("nop":);
-            __asm volatile ("nop":);
-            __asm volatile ("nop":);
-            addr <<= 8;
-            val = gpio_get_all();
-            addr |= DATA(val);
-            __asm volatile ("nop":);
-
-            STROBE(0);
-            __asm volatile ("nop":);
-            STROBE(1);
-            __asm volatile ("nop":);
-            __asm volatile ("nop":);
-            __asm volatile ("nop":);
-            __asm volatile ("nop":);
-            __asm volatile ("nop":);
-            __asm volatile ("nop":);
-            __asm volatile ("nop":);
-            __asm volatile ("nop":);
-            addr <<= 8;
-            val = gpio_get_all();
-            addr |= DATA(val);
-            __asm volatile ("nop":);
-
-
-            STROBE(0);
-            __asm volatile ("nop":);
-            STROBE(1);
-            __asm volatile ("nop":);
-            __asm volatile ("nop":);
-            __asm volatile ("nop":);
-            __asm volatile ("nop":);
-            __asm volatile ("nop":);
-            __asm volatile ("nop":);
-            __asm volatile ("nop":);
-            __asm volatile ("nop":);
             data = 0;
-            val = gpio_get_all();
-            data |= DATA(val);
-
-            STROBE(0);
-            __asm volatile ("nop":);
-            STROBE(1);
-            __asm volatile ("nop":);
-            __asm volatile ("nop":);
-            __asm volatile ("nop":);
-            __asm volatile ("nop":);
-            __asm volatile ("nop":);
-            __asm volatile ("nop":);
-            __asm volatile ("nop":);
-            __asm volatile ("nop":);
-            data <<= 8;
-            val = gpio_get_all();
-            data |= DATA(val);
-
-            STROBE(0);
-            __asm volatile ("nop":);
-            STROBE(1);
-*/
 
             padd( 0 );
-            val = gpio_get_all();
-            val = gpio_get_all();
-            val = gpio_get_all();
-            printf("0: %x\n", DATA(val) );
-
+            buf[c++] = gpio_get_all();
+            
             padd( 1 );
-            val = gpio_get_all();
-            val = gpio_get_all();
-            val = gpio_get_all();
-            printf("1: %x\n", DATA(val) );
+            buf[c++] = gpio_get_all();
 
             padd( 2 );
-            val = gpio_get_all();
-            val = gpio_get_all();
-            val = gpio_get_all();
-            printf("2: %x\n", DATA(val) );
+            buf[c++] = gpio_get_all();
 
             padd( 3 );
-            val = gpio_get_all();
-            val = gpio_get_all();
-            val = gpio_get_all();
-            printf("3: %x\n", DATA(val) );
+            buf[c++] = gpio_get_all();
 
             padd( 4 );
-            val = gpio_get_all();
-            val = gpio_get_all();
-            val = gpio_get_all();
-            printf("4: %x\n", DATA(val) );
-
-            padd( 5 );
-            val = gpio_get_all();
-            val = gpio_get_all();
-            val = gpio_get_all();
-            printf("5: %x\n", DATA(val) );
-
-            padd( 6 );
-            val = gpio_get_all();
-            val = gpio_get_all();
-            val = gpio_get_all();
-            printf("6: %x\n", DATA(val) );
+            buf[c++] = gpio_get_all();
 
             padd( 7 );
-            val = gpio_get_all();
-            val = gpio_get_all();
-            val = gpio_get_all();
-            printf("7: %x\n", DATA(val) );
+            endt = to_us_since_boot(get_absolute_time());
+            padd( -1 );
 
-            padd(-1);
+            addr = ( (uint32_t)DATA(buf[0])<<16 ) | ( (uint32_t)DATA(buf[1])<<8 ) | ( (uint32_t)DATA(buf[2]) );
+            data = ( (uint32_t)DATA(buf[3])<<8 ) | ( (uint32_t)DATA(buf[4]) );
 
+            for( int i = 0 ; i < c ; i++ ) {
+                printf("%d: %x\n", i, DATA(buf[i]) );
+            }
 
-/*
-            printf("%6.6x: %4.4x\n", addr, data );
-            if( addr >= 0x300000 && addr < 0x37fd00)  {
-                target = pixels + (addr-0x300000);
+            printf("%6.6x: %4.4x (%ld)\n", addr, data, endt-startt );
+            if( addr >= 0xd00000 && addr < 0xd7fd00)  {
+                target = pixels + (addr-0xd00000);
 
-                printf("Writing %2.2x to offset %p\n", data, addr-0x300000 );
+                printf("Writing %2.2x to offset %p\n", data, addr-0xd00000 );
 
                 *target++ = ( data & 0xff );
                 *target = ( data >> 8 ) & 0xff;
             }
-*/
+            */
+            endt = to_us_since_boot(get_absolute_time());
+            printf("%6.6x: %4.4x (%ld)\n", addr, data, endt-startt );
         }
+#endif
 
         if( counter++ == 0x08000000 ) {
             printf("P2C\n");
