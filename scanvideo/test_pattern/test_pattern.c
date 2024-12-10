@@ -32,6 +32,8 @@
 void core1_func();
 void dma_handler();
 void parsebuf( short );
+void p2c_4bpp( uint8_t *outpix, int pixels_to_convert, uint8_t *in );
+
 
 void vga_320200_16_planar(scanvideo_scanline_buffer_t *buffer);
 void draw_test_pattern_stlow();
@@ -191,10 +193,9 @@ int main(void) {
     printf("Listening...\n");
 
     for( ;; ) {
-        if( parsetrigger ) {
-            parsetrigger = false;
-            parsebuf(bufidx);
-        }
+        sleep_ms(20);
+        uint8_t *target = (pixels+(X*Y/2));
+        p2c_4bpp( target, X*Y, pixels );
     }
 
 #endif
@@ -281,12 +282,14 @@ void parsebuf( short idx ) {
 
 
 void dma_handler() {
+    short oldbuf = bufidx;
     // Clear the interrupt request.
     dma_channel_acknowledge_irq1( dma_chan );
     // Give the channel a new wave table entry to read from, and re-trigger it
     bufidx = bufidx > 0 ? 0 : 1;
     dma_channel_set_write_addr(dma_chan, capture_buf[bufidx], true);
-    parsetrigger = true;
+    //parsetrigger = true;
+    parsebuf(oldbuf);
 }
 
 void draw_color_bar(scanvideo_scanline_buffer_t *buffer) {
@@ -374,7 +377,7 @@ void vga_320200_16_planar(scanvideo_scanline_buffer_t *buffer) {
     }
     else {
         uint32_t colidx;
-        uint32_t *src = (uint32_t*)(pixels/*+(X*Y/2)*/+(line_num*X/2)); // 4bpp -- two pix per byte, but second half of framebuffer (for background p2c)
+        uint32_t *src = (uint32_t*)(pixels+(X*Y/2)+(line_num*X/2)); // 4bpp -- two pix per byte, but second half of framebuffer (for background p2c)
 
         *p++ = COMPOSABLE_RAW_RUN;
         
@@ -510,4 +513,51 @@ void draw_test_pattern_stlow() {
         }
 
     }
+}
+
+void p2c_4bpp( uint8_t *outpix, int pixels_to_convert, uint8_t *in ) {
+
+    uint8_t pix[16];
+    uint16_t *block = (void*)in;
+    uint16_t plane[4];
+
+    for( int pixel = 0 ; pixel < pixels_to_convert ; pixel += 16 ) {
+        plane[0] = *block++;
+        plane[1] = *block++;
+        plane[2] = *block++;
+        plane[3] = *block++;
+
+        // pixel 1 is the sum of the first bit of each of the (4) words raised by two each time
+
+        for( int i = 0 ; i < 16 ; i++ ) {
+            pix[15-i] =    ((( plane[0]>>i) & 0x1 ) << 0) | 
+                        ((( plane[1]>>i) & 0x1 ) << 1) |
+                        ((( plane[2]>>i) & 0x1 ) << 2) |
+                        ((( plane[3]>>i) & 0x1 ) << 3);
+        }
+//#define SWAP
+#ifdef SWAP
+        /* byteswap happens here*/
+        *(outpix++) = (pix[9] << 4) | pix[8];
+        *(outpix++) = (pix[11] << 4) | pix[10];
+        *(outpix++) = (pix[13] << 4) | pix[12];
+        *(outpix++) = (pix[15] << 4) | pix[14];
+
+        *(outpix++) = (pix[1] << 4) | pix[0];
+        *(outpix++) = (pix[3] << 4) | pix[2];
+        *(outpix++) = (pix[5] << 4) | pix[4];
+        *(outpix++) = (pix[7] << 4) | pix[6];
+#else
+        *(outpix++) = (pix[1] << 4) | pix[0];
+        *(outpix++) = (pix[3] << 4) | pix[2];
+        *(outpix++) = (pix[5] << 4) | pix[4];
+        *(outpix++) = (pix[7] << 4) | pix[6];
+
+        *(outpix++) = (pix[9] << 4) | pix[8];
+        *(outpix++) = (pix[11] << 4) | pix[10];
+        *(outpix++) = (pix[13] << 4) | pix[12];
+        *(outpix++) = (pix[15] << 4) | pix[14];
+#endif
+    }    
+
 }
