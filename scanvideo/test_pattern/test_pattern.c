@@ -207,14 +207,18 @@ int main(void) {
 static int32_t rxdata[5];
 
 //--- 8 bye writes are incorrect here. Always writing 16 bit and undoing odd address
+#define VIDHIGH 0xff8200
+#define VIDMID  0xff8202
+#define VIDLOW  0xff820c
 
 void writemem(  ) {
+    static uint32_t screenbase = 0x78000;
+    
     uint32_t add;
     uint8_t datah;
     uint8_t datal;
     bool high = false;
     bool low = false;
-
 
     if( rxdata[4] == -1 ) {
         datah = rxdata[3];
@@ -225,26 +229,47 @@ void writemem(  ) {
         low = true;
     }
     else {
-        datah = rxdata[4];
-        datal = rxdata[3];
+        datah = rxdata[3];
+        datal = rxdata[4];
         high = true;
         low = true;
     }
 
     add = (rxdata[0] << 16)|(rxdata[1]<<8)|rxdata[2];
-    add -= 0x78000;
-    
-    if( add > X*Y/2 ) {
-        high = false;
-        low = false;
+    /*
+    if( add == VIDLOW ) {
+        screenbase &= 0xffff00;
+        screenbase |= datal;
+        return;
+    }*/
+    if( add == VIDMID ) {
+        screenbase &= 0xff00ff;
+        screenbase |= (datal<<8);
+        return;
     }
+    if( add == VIDHIGH ) {
+        screenbase &= 0x00ffff;
+        screenbase |= (datal<<16);
+        return;
+    }
+    
+    if( add < screenbase ) // too low
+        return;
 
-    //low = false;
+    uint32_t screen_offset = add - screenbase;
+    
+    if( screen_offset > X*Y/2 ) // too high
+        return;
 
-    if( high )
-        pixels[add] = datah;
-    if( low )
-        pixels[add+1] = datal;
+    /* wrong way logically -- big/little endian fubar*/
+    if( high && low ) {
+        pixels[screen_offset+1] = datah;
+        pixels[screen_offset] = datal;
+    }
+    else if( high )
+        pixels[screen_offset+1] = datah;
+    else if( low )
+        pixels[screen_offset] = datal;
 }
 
 void parsebuf( short idx ) {
