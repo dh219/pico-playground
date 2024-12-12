@@ -206,44 +206,48 @@ int main(void) {
 
 static int32_t rxdata[5];
 
-void writemem() {
+//--- 8 bye writes are incorrect here. Always writing 16 bit and undoing odd address
+
+void writemem(  ) {
     uint32_t add;
-    uint16_t data;
-    bool is8bit = false;
-    if( rxdata[3] == -1 ) {
-        data = rxdata[4];
-        is8bit = true;
-        rxdata[2] |= 0x1;
+    uint8_t datah;
+    uint8_t datal;
+    bool high = false;
+    bool low = false;
+
+
+    if( rxdata[4] == -1 ) {
+        datah = rxdata[3];
+        high = true;
     }
-    else if( rxdata[4] == -1 ) {
-        data = rxdata[3];
-        is8bit = true;
+    else if( rxdata[3] == -1 ) { 
+        datal = rxdata[4];
+        low = true;
     }
     else {
-        data = (rxdata[3]<<8)|rxdata[4];
+        datah = rxdata[4];
+        datal = rxdata[3];
+        high = true;
+        low = true;
     }
+
     add = (rxdata[0] << 16)|(rxdata[1]<<8)|rxdata[2];
     add -= 0x78000;
-    add /= 2; // bytes->words
-    if( add > sizeof(pixels) )
-        add = 0;
-        
-    uint16_t *pixword = (uint16_t*)pixels;
-    pixword[add] = data;
+    
+    if( add > X*Y/2 ) {
+        high = false;
+        low = false;
+    }
 
-    //printf("Done. 0x%6.6lx = 0x%4.4x %s\n", add, data, is8bit ? " (8 bit only)" : "" );
+    //low = false;
+
+    if( high )
+        pixels[add] = datah;
+    if( low )
+        pixels[add+1] = datal;
 }
 
 void parsebuf( short idx ) {
-/*    
-    static uint8_t data[5];
-    uint32_t address;
-    uint16_t value;
-
-    for( int i = 0 ; i < CAPTUREDEPTH ; i++ ) {
-
-    }
-    */
     palette[255] = rand() & 0x0fff;
 
     uint32_t* ptr = capture_buf[idx];
@@ -261,16 +265,20 @@ void parsebuf( short idx ) {
                 rxdata[4] = -1;
                 break;
             case(2):
+                rxdata[1] = data;
+                break;
             case(3):
+                rxdata[2] = data;
+                break;
             case(4):
-                rxdata[type-1] = data;
+                rxdata[3] = data;
                 break;
             case(5):
-                rxdata[4] = data;
+                rxdata[3] = data;
                 writemem();
                 break;
             case(6):
-                rxdata[3] = data;
+                rxdata[4] = data;
                 writemem();
                 break;
             default:
