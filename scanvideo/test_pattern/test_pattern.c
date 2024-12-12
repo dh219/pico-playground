@@ -390,7 +390,6 @@ void vga_320200_16_planar(scanvideo_scanline_buffer_t *buffer) {
         *p++ = COMPOSABLE_RAW_RUN;
         
         colidx = *src++;
-        colidx = 10;
         *p++ = palette[(colidx >> 0)&0xf];
         *p++ = LINPIX - 3;
         *p++ = palette[(colidx >> 4)&0xf];
