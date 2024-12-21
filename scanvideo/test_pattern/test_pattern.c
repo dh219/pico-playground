@@ -23,7 +23,8 @@
 
 
 #define PIO_INPUT_PIN_BASE 14
-#define CAPTUREDEPTH 2000
+#define CAPTUREDEPTH 2500
+#define CAPTUREBUFS 2
 #define CAPTUREBYTES (CAPTUREDEPTH*sizeof(uint32_t))
 
 
@@ -74,8 +75,9 @@ static uint8_t pixels[MAXX*MAXY*MAXDEPTH/8]; // ST resolutions are all the same 
 static uint8_t *pixout;
 static uint8_t *pixin[2];
 
-uint32_t *capture_buf[2];
+uint32_t capture_buf[CAPTUREDEPTH][CAPTUREBUFS];
 static volatile unsigned short bufidx = 0;
+static volatile unsigned short parseidx = 0;
 
 static const uint16_t def_palette[256] = {
 0x0fff,0x000f,0x00f0,0x00ff,0x0f00,0x0f0f,0x0ff0,0x0bbb,
@@ -168,12 +170,8 @@ int main(void) {
     stdio_init_all();
 
     puts("initialising...\n");
-
-    /* DMA */
-    capture_buf[0] = malloc(CAPTUREBYTES);
-    capture_buf[1] = malloc(CAPTUREBYTES);
-    hard_assert(capture_buf[0]);
-    hard_assert(capture_buf[1]);
+    
+    set_sys_clock_khz(250000, true);
 
     for( int i = 14 ; i <= 28 ; i++ ) {
         gpio_init(i);
@@ -189,7 +187,6 @@ int main(void) {
     }
 
     draw_test_pattern_stlow();
-    //sleep_ms(3000);
     for( int i = 0 ; i < SCREENHIST ; i++ ) {
         screentimes[i].base = screenreg;
         screentimes[i].t = get_absolute_time();
@@ -205,6 +202,8 @@ int main(void) {
 
     // wait for initialization of video to be complete
     sem_acquire_blocking(&video_initted);
+
+    sleep_ms(3000);
 
     PIO pio = pio1;
     uint offset = pio_add_program(pio, &clocked_input_program);
@@ -251,7 +250,8 @@ int main(void) {
     uint32_t oldreg = screenreg;
     screenbase = screenreg;
     for( ;; ) {
-        sleep_ms(20);
+        sleep_ms(50);
+
         uint8_t *src = pixin[0];
         switch( rez ) {
             case(1):
@@ -311,7 +311,6 @@ void writemem(  ) {
     }
 
     add = (rxdata[0] << 16)|(rxdata[1]<<8)|rxdata[2];
-
     
     /* breaks on my -FM. perhaps normal given this is an STE register. Assumed it wasn't used.
     if( add == STVIDLOW ) {
@@ -424,24 +423,23 @@ void parsebuf( short idx ) {
     }
 }
 
-
 void dma_handler() {
-    short oldbuf = bufidx;
+    short parseidx = bufidx;
+    bufidx = (bufidx+1) % CAPTUREBUFS;
     // Clear the interrupt request.
     dma_channel_acknowledge_irq1( dma_chan );
     // Give the channel a new wave table entry to read from, and re-trigger it
-    bufidx = bufidx > 0 ? 0 : 1;
     dma_channel_set_write_addr(dma_chan, capture_buf[bufidx], true);
-    //parsetrigger = true;
-    parsebuf(oldbuf);
+    parsebuf( parseidx );
 }
 
 void core1_func() {
     // initialize video and interrupts on core 1
     //scanvideo_setup(&vga_mode_320x240_60);
     //scanvideo_setup(&vga_mode_800x600_54);
+    
     scanvideo_setup(&vga_mode_local);
-    scanvideo_timing_enable(true);
+    scanvideo_timing_enable(true);    
     sem_release(&video_initted);
 
     short oldrez = 0;
@@ -771,13 +769,7 @@ void p2c_2bpp( uint8_t *outpix, int pixels_to_convert, uint8_t *in ) {
                         ((( plane[1]>>i) & 0x1 ) << 1);
         }
 
-        // this is where the bytewap should happen
-/*
-        *(outpix++) = (pix[12] << 6 ) | ( pix[13] << 4) | (pix[14] << 2) | pix[15];
-        *(outpix++) = (pix[8]  << 6 ) | ( pix[9] << 4 ) | (pix[10] << 2) | pix[11];
-        *(outpix++) = (pix[4] << 6) | (pix[5] << 4 ) | (pix[6] << 2) | pix[7];
-        *(outpix++) = (pix[0] << 6) | (pix[1] << 4 ) | (pix[2] << 2) | pix[3];
-        */
+        // this is where the bytewap happens
         *(outpix++) = (pix[11]  << 6 ) | ( pix[10] << 4 ) | (pix[9] << 2) | pix[8];
         *(outpix++) = (pix[15] << 6 ) | ( pix[14] << 4) | (pix[13] << 2) | pix[12];
         *(outpix++) = (pix[3] << 6) | (pix[2] << 4 ) | (pix[1] << 2) | pix[0];
