@@ -23,7 +23,7 @@
 
 
 #define PIO_INPUT_PIN_BASE 14
-#define CAPTUREDEPTH 2000
+#define CAPTUREDEPTH 1000
 #define CAPTUREBYTES (CAPTUREDEPTH*sizeof(uint32_t))
 
 
@@ -166,6 +166,8 @@ void setup_pixelbuffers() {
 
 int main(void) {
     stdio_init_all();
+
+    set_sys_clock_khz(250000, true);
 
     puts("initialising...\n");
 
@@ -388,37 +390,47 @@ void writemem(  ) {
 void parsebuf( short idx ) {
     uint32_t* ptr = capture_buf[idx];
 
+    uint32_t type;
+    uint32_t data;
     for( uint l = 0 ; l < CAPTUREDEPTH ; l++ ) {
         //printf("%lx\n", *ptr );
-        uint32_t type = (*ptr)>>12; 
-        uint32_t data = (*ptr)&0xff; 
-        switch( type ) {
-            case(1):
-                rxdata[0] = data;
-                rxdata[1] = -1;
-                rxdata[2] = -1;
-                rxdata[3] = -1;
-                rxdata[4] = -1;
-                break;
-            case(2):
-                rxdata[1] = data;
-                break;
-            case(3):
-                rxdata[2] = data;
-                break;
-            case(4):
-                rxdata[3] = data;
-                break;
-            case(5):
-                rxdata[3] = data;
-                writemem();
-                break;
-            case(6):
-                rxdata[4] = data;
-                writemem();
-                break;
-            default:
-                break;        
+        for( uint hl = 0 ; hl < 2 ; hl++ ) {
+            if( hl == 1 ) {
+                type = ((*ptr)>>12)&0x7; 
+                data = ((*ptr))&0xff; 
+            }
+            else{
+                type = ((*ptr)>>12>>15)&0x7; 
+                data = ((*ptr)>>15)&0xff;
+            }
+            switch( type ) {
+                case(1):
+                    rxdata[0] = data;
+                    rxdata[1] = -1;
+                    rxdata[2] = -1;
+                    rxdata[3] = -1;
+                    rxdata[4] = -1;
+                    break;
+                case(2):
+                    rxdata[1] = data;
+                    break;
+                case(3):
+                    rxdata[2] = data;
+                    break;
+                case(4):
+                    rxdata[3] = data;
+                    break;
+                case(5):
+                    rxdata[3] = data;
+                    writemem();
+                    break;
+                case(6):
+                    rxdata[4] = data;
+                    writemem();
+                    break;
+                default:
+                    break;        
+            }
         }
         ptr++;
     }
