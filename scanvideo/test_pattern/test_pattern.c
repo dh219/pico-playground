@@ -23,12 +23,12 @@
 
 
 #define PIO_INPUT_PIN_BASE 14
-#define CAPTUREDEPTH 1000
+#define CAPTUREDEPTH 2000
 #define CAPTUREBYTES (CAPTUREDEPTH*sizeof(uint32_t))
 
 
 void core1_func();
-void dma_handler();
+static void dma_handler();
 void parsebuf( short );
 void p2c_4bpp( uint8_t *outpix, int pixels_to_convert, uint8_t *in );
 void p2c_2bpp( uint8_t *outpix, int pixels_to_convert, uint8_t *in );
@@ -48,7 +48,7 @@ void clear_screen();
 static semaphore_t video_initted;
 static bool invert;
 static volatile bool parsetrigger = false;
-static volatile uint dma_chan;
+static volatile uint dma_chan[2];
 static volatile bool doublebuf = false;
 static volatile uint8_t rez = 0x0;
 
@@ -217,32 +217,54 @@ int main(void) {
     // >16bits/clk here, i.e. if you need to saturate the bus completely.
     bus_ctrl_hw->priority = BUSCTRL_BUS_PRIORITY_DMA_W_BITS | BUSCTRL_BUS_PRIORITY_DMA_R_BITS;
 
-    dma_chan = dma_claim_unused_channel(true);
-    dma_channel_config c = dma_channel_get_default_config(dma_chan);
-    channel_config_set_read_increment(&c, false);
-    channel_config_set_write_increment(&c, true);
-    channel_config_set_dreq(&c, pio_get_dreq(pio, sm, false));
-//    channel_config_set_ring (&c, true, 5);
-
-
-    // Load the clocked_input program, and configure a free state machine
-    // to run the program.
-    clocked_input_program_init(pio, sm, offset, PIO_INPUT_PIN_BASE);
-
     bufidx = 0;
-    dma_channel_configure(dma_chan, &c,
-        capture_buf[bufidx],        // Destination pointer
+
+    dma_chan[0] = dma_claim_unused_channel(true);
+    dma_chan[1] = dma_claim_unused_channel(true);
+
+    dma_channel_config dma_config[2];
+
+    // channel 1
+    dma_config[0] = dma_channel_get_default_config(dma_chan[0]);
+    channel_config_set_read_increment(&dma_config[0], false);
+    channel_config_set_write_increment(&dma_config[0], true);
+    channel_config_set_dreq(&dma_config[0], pio_get_dreq(pio, sm, false));
+//    channel_config_set_ring (&dma_config[0], true, 5);
+    channel_config_set_chain_to(&dma_config[0], dma_chan[1]);
+    // Tell the DMA to raise IRQ line 1 when the channel finishes a block
+    dma_channel_set_irq1_enabled(dma_chan[0], true);
+
+    dma_channel_configure(dma_chan[0], &dma_config[0],
+        capture_buf[0],        // Destination pointer
         &pio->rxf[sm],      // Source pointer
         CAPTUREDEPTH,       // Number of transfers
         true                // Start immediately
     );
 
-    // Tell the DMA to raise IRQ line 0 when the channel finishes a block
-    dma_channel_set_irq1_enabled(dma_chan, true);
 
-    // Configure the processor to run dma_handler() when DMA IRQ 0 is asserted
+    // channel 2
+    dma_config[1] = dma_channel_get_default_config(dma_chan[1]);
+    channel_config_set_read_increment(&dma_config[1], false);
+    channel_config_set_write_increment(&dma_config[1], true);
+    channel_config_set_dreq(&dma_config[1], pio_get_dreq(pio, sm, false));
+//    channel_config_set_ring (&dma_config[1], true, 5);
+    channel_config_set_chain_to(&dma_config[1], dma_chan[0]);
+    dma_channel_set_irq1_enabled(dma_chan[1], true);
+
+    dma_channel_configure(dma_chan[1], &dma_config[1],
+        capture_buf[1],        // Destination pointer
+        &pio->rxf[sm],      // Source pointer
+        CAPTUREDEPTH,       // Number of transfers
+        false               // Start immediately
+    );
+
+    // Configure the processor to run dma_handler() when DMA IRQ 1 is asserted
     irq_set_exclusive_handler(DMA_IRQ_1, dma_handler);
     irq_set_enabled(DMA_IRQ_1, true);
+
+    // Load the clocked_input program, and configure a free state machine
+    // to run the program.
+    clocked_input_program_init(pio, sm, offset, PIO_INPUT_PIN_BASE);
 
     printf( "red =   %4.4x\n", PICO_SCANVIDEO_PIXEL_FROM_RGB5(0xf, 0x0, 0x0) );
     printf( "green = %4.4x\n", PICO_SCANVIDEO_PIXEL_FROM_RGB5(0x0, 0xf, 0x0) );
@@ -436,7 +458,7 @@ void parsebuf( short idx ) {
     }
 }
 
-
+#if 0
 void dma_handler() {
     short oldbuf = bufidx;
     // Clear the interrupt request.
@@ -447,6 +469,31 @@ void dma_handler() {
     //parsetrigger = true;
     parsebuf(oldbuf);
 }
+#else
+// Called when one of the DMA buffers is full
+static void dma_handler() {
+
+    // DMA chan 1.
+    if (dma_hw->ints1 & 1u << dma_chan[0]) {
+        // Clear the interrupt request.
+        dma_hw->ints0 = 1u << dma_chan[0];
+        // reset chan 1 write address for next time
+        dma_channel_set_write_addr(dma_chan[0], capture_buf[0], false);
+        // handle stuff
+        parsebuf(0);
+    }
+    // DMA chan 2.
+    else if (dma_hw->ints1 & 1u << dma_chan[1]) {
+        // Clear the interrupt request.
+        dma_hw->ints0 = 1u << dma_chan[1];
+        // reset chan 1 write address for next time
+        dma_channel_set_write_addr(dma_chan[1], capture_buf[1], false);
+        // handle stuff
+        parsebuf(1);
+  }
+}
+#endif
+
 
 void core1_func() {
     // initialize video and interrupts on core 1
