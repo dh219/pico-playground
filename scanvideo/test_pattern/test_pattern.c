@@ -149,7 +149,7 @@ struct scanvideo_mode  vga_mode_local =
 
 void setup_pixelbuffers() {
     
-    if( 0 && rez <= 2 ) {
+    if( rez <= 2 ) {
         uint32_t sz = X*Y*DEPTH/8;
 
         assert( sz * 3 < sizeof( pixels ) );
@@ -277,6 +277,7 @@ int main(void) {
     uint32_t oldreg = screenreg;
     screenbase = screenreg;
     for( ;; ) {
+        /*
         switch( parsetrigger ) {
             case(0):
                 parsetrigger = -1;
@@ -290,7 +291,7 @@ int main(void) {
                 break;
         }
         continue;
-
+*/
         sleep_ms(20);
         uint8_t *src = pixin[0];
         switch( rez ) {
@@ -517,8 +518,8 @@ static void dma_handler() {
         // reset chan 1 write address for next time
         dma_channel_set_write_addr(dma_chan[0], capture_buf[0], false);
         // handle stuff
-        //parsebuf(0);
-        parsetrigger = 0;
+        parsebuf(0);
+        //parsetrigger = 0;
     }
     // DMA chan 2.
     else if (dma_hw->ints1 & 1u << dma_chan[1]) {
@@ -528,8 +529,8 @@ static void dma_handler() {
         // reset chan 2 write address for next time
         dma_channel_set_write_addr(dma_chan[1], capture_buf[1], false);
         // handle stuff
-        //parsebuf(1);
-        parsetrigger = 1;
+        parsebuf(1);
+        //parsetrigger = 1;
   }
 }
 #endif
