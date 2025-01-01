@@ -23,7 +23,7 @@
 
 
 #define PIO_INPUT_PIN_BASE 14
-#define CAPTUREDEPTH 2000
+#define CAPTUREDEPTH 2800
 #define CAPTUREBYTES (CAPTUREDEPTH*sizeof(uint32_t))
 
 
@@ -47,7 +47,7 @@ void clear_screen();
 
 static semaphore_t video_initted;
 static bool invert;
-static volatile bool parsetrigger = false;
+static volatile short parsetrigger = -1;
 static volatile uint dma_chan[2];
 static volatile bool doublebuf = false;
 static volatile uint8_t rez = 0x0;
@@ -143,13 +143,13 @@ struct scanvideo_mode  vga_mode_local =
     .pio_program = &video_24mhz_composable,
     .width = 640,
     .height = 480,
-    .xscale = 1,
-    .yscale = 1,
+    .xscale = 2,
+    .yscale = 2,
 };
 
 void setup_pixelbuffers() {
     
-    if( rez <= 2 ) {
+    if( 0 && rez <= 2 ) {
         uint32_t sz = X*Y*DEPTH/8;
 
         assert( sz * 3 < sizeof( pixels ) );
@@ -215,8 +215,10 @@ int main(void) {
     // Grant high bus priority to the DMA, so it can shove the processors out
     // of the way. This should only be needed if you are pushing things up to
     // >16bits/clk here, i.e. if you need to saturate the bus completely.
+#define DMAPRIORITY 1
+#ifdef DMAPRIORITY
     bus_ctrl_hw->priority = BUSCTRL_BUS_PRIORITY_DMA_W_BITS | BUSCTRL_BUS_PRIORITY_DMA_R_BITS;
-
+#endif
     bufidx = 0;
 
     dma_chan[0] = dma_claim_unused_channel(true);
@@ -275,6 +277,20 @@ int main(void) {
     uint32_t oldreg = screenreg;
     screenbase = screenreg;
     for( ;; ) {
+        switch( parsetrigger ) {
+            case(0):
+                parsetrigger = -1;
+                parsebuf(0);
+                break;
+            case(1):
+                parsetrigger = -1;
+                parsebuf(1);
+                break;
+            default:
+                break;
+        }
+        continue;
+
         sleep_ms(20);
         uint8_t *src = pixin[0];
         switch( rez ) {
@@ -318,7 +334,11 @@ static int32_t rxdata[5];
 
 #define STRESSET    0xff8260
 
-void writemem(  ) {
+void writereg() {
+
+}
+
+void writemem( short bufinuse ) {
     uint32_t add;
     uint8_t datah;
     uint8_t datal;
@@ -336,27 +356,48 @@ void writemem(  ) {
 
     add = (rxdata[0] << 16)|(rxdata[1]<<8)|rxdata[2];
 
-    
-    /* breaks on my -FM. perhaps normal given this is an STE register. Assumed it wasn't used.
+    uint32_t screen_offset = add - screenbase;
+    if( add >= screenbase && screen_offset < X*Y/2 ) // within the screen
+    {
+
+        if( high && low && datah == 0x55 && datal == 0x55 ) {
+            pixin[0][screen_offset]     = 0x22 + bufinuse * 0x22;
+            pixin[0][screen_offset+1]   = 0x22 + bufinuse * 0x22;
+            return;
+        }
+
+        if( high )
+            pixin[0][screen_offset] = datah;
+        if( low )
+            pixin[0][screen_offset+1] = datal;
+        return;
+    }
+
+#ifdef STE
+    // breaks on my -FM. perhaps normal given this is an STE register. Assumed it wasn't used.
     if( add == STVIDLOW ) {
         screen = true;
         screenreg &= 0xffff00;
         screenreg |= (uint32_t)datal;
         return;
     }
-    */
+    else
+#endif
+
+    if( add < 0xf00000 )
+        return;
+
     if( add == STVIDMID ) {
         screenreg &= 0xff00ff;
         screenreg |= ((uint32_t)datal)<<8;
         return;
     }
-    if( add == STVIDHIGH ) {
+    else if( add == STVIDHIGH ) {
         screenreg &= 0x00ffff;
         screenreg |= ((uint32_t)datal)<<16;
         return;
     }
-
-    if( (add == STRESSET) ) {
+    else if( (add == STRESSET) ) {
         rez = datah & 0x3;
         switch( rez ) {
             case(2):
@@ -378,8 +419,7 @@ void writemem(  ) {
         }
         setup_pixelbuffers();
     }
-
-    if( (add & STPALMASK) == STPALETTE ) {
+    else if( (add & STPALMASK) == STPALETTE ) {
         uint32_t index = ( add - STPALETTE )>>1;
         if( low ) {
             uint16_t blue   = ((datal & 0x7) << 1) + ( (datal>>3) & 0x1 );
@@ -395,18 +435,6 @@ void writemem(  ) {
         return;
     }
 
-    if( add < screenbase ) // too low
-        return;
-
-    uint32_t screen_offset = add - screenbase;
-    
-    if( screen_offset > X*Y/2 ) // too high
-        return;
-
-    if( high )
-        pixin[0][screen_offset] = datah;
-    if( low )
-        pixin[0][screen_offset+1] = datal;
 }
 
 void parsebuf( short idx ) {
@@ -414,9 +442,12 @@ void parsebuf( short idx ) {
 
     uint32_t type;
     uint32_t data;
+
     for( uint l = 0 ; l < CAPTUREDEPTH ; l++ ) {
-        //printf("%lx\n", *ptr );
-        for( uint hl = 0 ; hl < 2 ; hl++ ) {
+
+#if 1
+        for( uint hl = 0 ; hl < 2 ; hl++ ) 
+        {
             if( hl == 1 ) {
                 type = ((*ptr)>>12)&0x7; 
                 data = ((*ptr))&0xff; 
@@ -425,6 +456,11 @@ void parsebuf( short idx ) {
                 type = ((*ptr)>>12>>15)&0x7; 
                 data = ((*ptr)>>15)&0xff;
             }
+#else
+        {
+            type = ((*ptr)>>12)&0x7; 
+            data = ((*ptr))&0xff; 
+#endif            
             switch( type ) {
                 case(1):
                     rxdata[0] = data;
@@ -444,11 +480,11 @@ void parsebuf( short idx ) {
                     break;
                 case(5):
                     rxdata[3] = data;
-                    writemem();
+                    writemem(idx);
                     break;
                 case(6):
                     rxdata[4] = data;
-                    writemem();
+                    writemem(idx);
                     break;
                 default:
                     break;        
@@ -476,20 +512,24 @@ static void dma_handler() {
     // DMA chan 1.
     if (dma_hw->ints1 & 1u << dma_chan[0]) {
         // Clear the interrupt request.
-        dma_hw->ints0 = 1u << dma_chan[0];
+//        dma_hw->ints1 = 1u << dma_chan[0];
+        dma_channel_acknowledge_irq1( dma_chan[0] );
         // reset chan 1 write address for next time
         dma_channel_set_write_addr(dma_chan[0], capture_buf[0], false);
         // handle stuff
-        parsebuf(0);
+        //parsebuf(0);
+        parsetrigger = 0;
     }
     // DMA chan 2.
     else if (dma_hw->ints1 & 1u << dma_chan[1]) {
         // Clear the interrupt request.
-        dma_hw->ints0 = 1u << dma_chan[1];
-        // reset chan 1 write address for next time
+//        dma_hw->ints1 = 1u << dma_chan[1];
+        dma_channel_acknowledge_irq1( dma_chan[1] );
+        // reset chan 2 write address for next time
         dma_channel_set_write_addr(dma_chan[1], capture_buf[1], false);
         // handle stuff
-        parsebuf(1);
+        //parsebuf(1);
+        parsetrigger = 1;
   }
 }
 #endif
@@ -525,8 +565,8 @@ void vga_320200_16_planar(scanvideo_scanline_buffer_t *buffer) {
     uint line_num = scanvideo_scanline_number(buffer->scanline_id);
     uint16_t *p = (uint16_t *) buffer->data;
 
-    uint linenum_virt = line_num/2;
-    short REALX = X*2;
+    uint linenum_virt = line_num;// /2;
+    short REALX = X; // *2;
 
     linenum_virt -= 20;
     if( linenum_virt < 0 || linenum_virt >= 200 ) { // blank
@@ -543,54 +583,54 @@ void vga_320200_16_planar(scanvideo_scanline_buffer_t *buffer) {
         colidx = *src++;
         *p++ = palette[(colidx >> 0)&0xf];
         *p++ = REALX - 3;
-        *p++ = palette[(colidx >> 0)&0xf];
+//        *p++ = palette[(colidx >> 0)&0xf];
 
         *p++ = palette[(colidx >> 4)&0xf];
-        *p++ = palette[(colidx >> 4)&0xf];
+//        *p++ = palette[(colidx >> 4)&0xf];
 
         *p++ = palette[(colidx >> 8)&0xf];
-        *p++ = palette[(colidx >> 8)&0xf];
+//        *p++ = palette[(colidx >> 8)&0xf];
 
         *p++ = palette[(colidx >> 12)&0xf];
-        *p++ = palette[(colidx >> 12)&0xf];
+//        *p++ = palette[(colidx >> 12)&0xf];
 
         *p++ = palette[(colidx >> 16)&0xf];
-        *p++ = palette[(colidx >> 16)&0xf];
+//        *p++ = palette[(colidx >> 16)&0xf];
 
         *p++ = palette[(colidx >> 20)&0xf];
-        *p++ = palette[(colidx >> 20)&0xf];
+//        *p++ = palette[(colidx >> 20)&0xf];
 
         *p++ = palette[(colidx >> 24)&0xf];
-        *p++ = palette[(colidx >> 24)&0xf];
+//        *p++ = palette[(colidx >> 24)&0xf];
 
         *p++ = palette[(colidx >> 28)&0xf];
-        *p++ = palette[(colidx >> 28)&0xf];
+//        *p++ = palette[(colidx >> 28)&0xf];
 
         for( int i = 8 ; i < X ; i+=8 ) {
             colidx = *src++;            
             *p++ = palette[(colidx >> 0)&0xf];
-            *p++ = palette[(colidx >> 0)&0xf];
+//            *p++ = palette[(colidx >> 0)&0xf];
 
             *p++ = palette[(colidx >> 4)&0xf];
-            *p++ = palette[(colidx >> 4)&0xf];
+//            *p++ = palette[(colidx >> 4)&0xf];
 
             *p++ = palette[(colidx >> 8)&0xf];
-            *p++ = palette[(colidx >> 8)&0xf];
+//            *p++ = palette[(colidx >> 8)&0xf];
 
             *p++ = palette[(colidx >> 12)&0xf];
-            *p++ = palette[(colidx >> 12)&0xf];
+//            *p++ = palette[(colidx >> 12)&0xf];
 
             *p++ = palette[(colidx >> 16)&0xf];
-            *p++ = palette[(colidx >> 16)&0xf];
+//            *p++ = palette[(colidx >> 16)&0xf];
 
             *p++ = palette[(colidx >> 20)&0xf];
-            *p++ = palette[(colidx >> 20)&0xf];
+//            *p++ = palette[(colidx >> 20)&0xf];
 
             *p++ = palette[(colidx >> 24)&0xf];
-            *p++ = palette[(colidx >> 24)&0xf];
+//            *p++ = palette[(colidx >> 24)&0xf];
 
             *p++ = palette[(colidx >> 28)&0xf];
-            *p++ = palette[(colidx >> 28)&0xf];
+//            *p++ = palette[(colidx >> 28)&0xf];
         }
     }
 
@@ -623,28 +663,9 @@ void vga_640200_4_planar(scanvideo_scanline_buffer_t *buffer) {
         uint32_t colidx;
         uint32_t *src = (uint32_t*)(pixout+(linenum_virt*X/4)); // 2bpp -- four pix per byte
 
-//        colidx = *src++;
         *p++ = COMPOSABLE_RAW_RUN;
-        /*
-        *p++ = palette[(colidx >> 0)&0x3];
-        *p++ = X - 3;
-        *p++ = palette[(colidx >> 2)&0x3];
-        *p++ = palette[(colidx >> 4)&0x3];
-        *p++ = palette[(colidx >> 6)&0x3];
-        *p++ = palette[(colidx >> 8)&0x3];
-        *p++ = palette[(colidx >> 10)&0x3];
-        *p++ = palette[(colidx >> 12)&0x3];
-        *p++ = palette[(colidx >> 14)&0x3];
-        *p++ = palette[(colidx >> 16)&0x3];
-        *p++ = palette[(colidx >> 18)&0x3];
-        *p++ = palette[(colidx >> 20)&0x3];
-        *p++ = palette[(colidx >> 22)&0x3];
-        *p++ = palette[(colidx >> 24)&0x3];
-        *p++ = palette[(colidx >> 26)&0x3];
-        *p++ = palette[(colidx >> 28)&0x3];
-        *p++ = palette[(colidx >> 30)&0x3];
-*/
-        for( int i = 0 ; i < X ; i += 16 ) {
+
+        for( int i = 0 ; i < /*X*/ 320 ; i += 16 ) {
             colidx = *src++;            
             *p++ = palette[(colidx >> 0)&0x3];
             if( i == 0 )
