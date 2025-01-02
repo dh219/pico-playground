@@ -23,6 +23,7 @@
 
 
 #define PIO_INPUT_PIN_BASE 14
+#define NUMBUFS 3
 #define CAPTUREDEPTH 2800
 #define CAPTUREBYTES (CAPTUREDEPTH*sizeof(uint32_t))
 
@@ -47,10 +48,14 @@ void clear_screen();
 
 static semaphore_t video_initted;
 static bool invert;
-static volatile short parsetrigger = -1;
 static volatile uint dma_chan[2];
 static volatile bool doublebuf = false;
 static volatile uint8_t rez = 0x0;
+
+#define QUEUELEN 0x10
+static volatile short queueread = 0;
+static volatile short queuewrite = 0;
+static volatile short parsequeue[QUEUELEN];
 
 #define SCREENHIST 5 // keep last N screen register addresses
 
@@ -63,8 +68,8 @@ uint32_t screenreg = 0x78000;
 uint32_t screenbase = 0x78000;
 
 // my screenbuffer
-#define MAXX 800
-#define MAXY 596
+#define MAXX 640
+#define MAXY 480
 #define MAXDEPTH 8
 
 static short X = 320;
@@ -74,8 +79,8 @@ static uint8_t pixels[MAXX*MAXY*MAXDEPTH/8]; // ST resolutions are all the same 
 static uint8_t *pixout;
 static uint8_t *pixin[2];
 
-uint32_t *capture_buf[2];
-static volatile unsigned short bufidx = 0;
+uint32_t *capture_buf[NUMBUFS];
+static volatile unsigned short dmabufidx[2];
 
 static const uint16_t def_palette[256] = {
 0x0fff,0x000f,0x00f0,0x00ff,0x0f00,0x0f0f,0x0ff0,0x0bbb,
@@ -147,9 +152,9 @@ struct scanvideo_mode  vga_mode_local =
     .yscale = 2,
 };
 
-void setup_pixelbuffers() {
+void setup_pixelpointers() {
     
-    if( rez <= 2 ) {
+    if( 0 &&  rez <= 2 ) {
         uint32_t sz = X*Y*DEPTH/8;
 
         assert( sz * 3 < sizeof( pixels ) );
@@ -164,6 +169,14 @@ void setup_pixelbuffers() {
     }
 }
 
+uint nextbuf(){
+    static uint lastallocatedbuf = 0;
+    uint newbuf;
+    newbuf = (lastallocatedbuf + 1) % NUMBUFS;
+    lastallocatedbuf = newbuf;
+    return newbuf;
+}
+
 int main(void) {
     stdio_init_all();
 
@@ -171,11 +184,14 @@ int main(void) {
 
     puts("initialising...\n");
 
+    for(int i = 0 ; i < QUEUELEN ; i++)
+        parsequeue[i] = -1;
+
     /* DMA */
-    capture_buf[0] = malloc(CAPTUREBYTES);
-    capture_buf[1] = malloc(CAPTUREBYTES);
-    hard_assert(capture_buf[0]);
-    hard_assert(capture_buf[1]);
+    for( int i = 0 ; i < NUMBUFS ; i++ ) {
+        capture_buf[i] = malloc(CAPTUREBYTES);
+        hard_assert(capture_buf[i]);
+    }
 
     for( int i = 14 ; i <= 28 ; i++ ) {
         gpio_init(i);
@@ -197,7 +213,7 @@ int main(void) {
         screentimes[i].t = get_absolute_time();
     }
 
-    setup_pixelbuffers();
+    setup_pixelpointers();
 
     // create a semaphore to be posted when video init is complete
     sem_init(&video_initted, 0, 1);
@@ -219,7 +235,6 @@ int main(void) {
 #ifdef DMAPRIORITY
     bus_ctrl_hw->priority = BUSCTRL_BUS_PRIORITY_DMA_W_BITS | BUSCTRL_BUS_PRIORITY_DMA_R_BITS;
 #endif
-    bufidx = 0;
 
     dma_chan[0] = dma_claim_unused_channel(true);
     dma_chan[1] = dma_claim_unused_channel(true);
@@ -236,8 +251,9 @@ int main(void) {
     // Tell the DMA to raise IRQ line 1 when the channel finishes a block
     dma_channel_set_irq1_enabled(dma_chan[0], true);
 
+    dmabufidx[0] = nextbuf();
     dma_channel_configure(dma_chan[0], &dma_config[0],
-        capture_buf[0],        // Destination pointer
+        capture_buf[dmabufidx[0]],        // Destination pointer
         &pio->rxf[sm],      // Source pointer
         CAPTUREDEPTH,       // Number of transfers
         true                // Start immediately
@@ -253,8 +269,9 @@ int main(void) {
     channel_config_set_chain_to(&dma_config[1], dma_chan[0]);
     dma_channel_set_irq1_enabled(dma_chan[1], true);
 
+    dmabufidx[1] = nextbuf();
     dma_channel_configure(dma_chan[1], &dma_config[1],
-        capture_buf[1],        // Destination pointer
+        capture_buf[dmabufidx[1]],        // Destination pointer
         &pio->rxf[sm],      // Source pointer
         CAPTUREDEPTH,       // Number of transfers
         false               // Start immediately
@@ -276,23 +293,23 @@ int main(void) {
 
     uint32_t oldreg = screenreg;
     screenbase = screenreg;
+
+    absolute_time_t t1, t2;
+    t1 = get_absolute_time();
     for( ;; ) {
-        /*
-        switch( parsetrigger ) {
-            case(0):
-                parsetrigger = -1;
-                parsebuf(0);
-                break;
-            case(1):
-                parsetrigger = -1;
-                parsebuf(1);
-                break;
-            default:
-                break;
+        
+        if( parsequeue[queueread] >= 0 ) {
+            parsebuf(parsequeue[queueread]);
+            parsequeue[queueread] = -1;
+            queueread = (queueread+1) % QUEUELEN;
         }
-        continue;
-*/
-        sleep_ms(20);
+    continue;
+        t2 = get_absolute_time();
+        if( absolute_time_diff_us( t1, t2 ) < 20000 )
+            continue;
+        t1 = t2;
+
+//        sleep_ms(20);
         uint8_t *src = pixin[0];
         switch( rez ) {
             case(1):
@@ -335,10 +352,6 @@ static int32_t rxdata[5];
 
 #define STRESSET    0xff8260
 
-void writereg() {
-
-}
-
 void writemem( short bufinuse ) {
     uint32_t add;
     uint8_t datah;
@@ -358,21 +371,24 @@ void writemem( short bufinuse ) {
     add = (rxdata[0] << 16)|(rxdata[1]<<8)|rxdata[2];
 
     uint32_t screen_offset = add - screenbase;
-    if( add >= screenbase && screen_offset < X*Y/2 ) // within the screen
+    if( add >= screenbase && screen_offset < X*Y * DEPTH/8 ) // within the screen
     {
-
+#if 0
         if( high && low && datah == 0x55 && datal == 0x55 ) {
             pixin[0][screen_offset]     = 0x22 + bufinuse * 0x22;
             pixin[0][screen_offset+1]   = 0x22 + bufinuse * 0x22;
             return;
         }
-
+#endif
         if( high )
             pixin[0][screen_offset] = datah;
         if( low )
             pixin[0][screen_offset+1] = datal;
         return;
     }
+
+    if( rxdata[0] < 0xf0 )
+        return;
 
 #ifdef STE
     // breaks on my -FM. perhaps normal given this is an STE register. Assumed it wasn't used.
@@ -384,10 +400,6 @@ void writemem( short bufinuse ) {
     }
     else
 #endif
-
-    if( add < 0xf00000 )
-        return;
-
     if( add == STVIDMID ) {
         screenreg &= 0xff00ff;
         screenreg |= ((uint32_t)datal)<<8;
@@ -418,7 +430,7 @@ void writemem( short bufinuse ) {
                 DEPTH = 4;
                 break;
         }
-        setup_pixelbuffers();
+        setup_pixelpointers();
     }
     else if( (add & STPALMASK) == STPALETTE ) {
         uint32_t index = ( add - STPALETTE )>>1;
@@ -509,28 +521,37 @@ void dma_handler() {
 #else
 // Called when one of the DMA buffers is full
 static void dma_handler() {
+    unsigned short oldbuf;
 
     // DMA chan 1.
     if (dma_hw->ints1 & 1u << dma_chan[0]) {
         // Clear the interrupt request.
 //        dma_hw->ints1 = 1u << dma_chan[0];
         dma_channel_acknowledge_irq1( dma_chan[0] );
+
         // reset chan 1 write address for next time
-        dma_channel_set_write_addr(dma_chan[0], capture_buf[0], false);
+        oldbuf = dmabufidx[0];
+        dmabufidx[0] = nextbuf();
+        dma_channel_set_write_addr(dma_chan[0], capture_buf[dmabufidx[0]], false);
         // handle stuff
-        parsebuf(0);
-        //parsetrigger = 0;
+        //parsebuf(oldbuf);
+        parsequeue[queuewrite] = oldbuf;
+        queuewrite = (queuewrite+1) % QUEUELEN;
     }
     // DMA chan 2.
     else if (dma_hw->ints1 & 1u << dma_chan[1]) {
         // Clear the interrupt request.
 //        dma_hw->ints1 = 1u << dma_chan[1];
         dma_channel_acknowledge_irq1( dma_chan[1] );
+
         // reset chan 2 write address for next time
-        dma_channel_set_write_addr(dma_chan[1], capture_buf[1], false);
+        oldbuf = dmabufidx[1];
+        dmabufidx[1] = nextbuf();
+        dma_channel_set_write_addr(dma_chan[1], capture_buf[dmabufidx[1]], false);
         // handle stuff
-        parsebuf(1);
-        //parsetrigger = 1;
+        //parsebuf(oldbuf);
+        parsequeue[queuewrite] = oldbuf;
+        queuewrite = (queuewrite+1) % QUEUELEN;
   }
 }
 #endif
