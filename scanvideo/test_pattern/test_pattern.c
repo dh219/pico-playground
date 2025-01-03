@@ -23,7 +23,7 @@
 
 
 #define PIO_INPUT_PIN_BASE 14
-#define NUMBUFS 3
+#define NUMBUFS 4
 #define CAPTUREDEPTH 2800
 #define CAPTUREBYTES (CAPTUREDEPTH*sizeof(uint32_t))
 
@@ -66,6 +66,8 @@ struct SCREENTIME {
 
 uint32_t screenreg = 0x78000;
 uint32_t screenbase = 0x78000;
+
+static volatile uint64_t _vbls = 0;
 
 // my screenbuffer
 #define MAXX 640
@@ -154,7 +156,7 @@ struct scanvideo_mode  vga_mode_local =
 
 void setup_pixelpointers() {
     
-    if( 0 &&  rez <= 2 ) {
+    if( rez <= 2 ) {
         uint32_t sz = X*Y*DEPTH/8;
 
         assert( sz * 3 < sizeof( pixels ) );
@@ -177,10 +179,19 @@ uint nextbuf(){
     return newbuf;
 }
 
+void parsecheck() {
+    while( parsequeue[queueread] >= 0 ) {
+        parsebuf(parsequeue[queueread]);
+        parsequeue[queueread] = -1;
+        queueread = (queueread+1) % QUEUELEN;
+    }
+}
+
 int main(void) {
     stdio_init_all();
 
     set_sys_clock_khz(250000, true);
+//    set_sys_clock_khz(200000, true);
 
     puts("initialising...\n");
 
@@ -206,17 +217,17 @@ int main(void) {
         palette[i] = def_palette[i];
     }
 
-    draw_test_pattern_stlow();
-    //sleep_ms(3000);
     for( int i = 0 ; i < SCREENHIST ; i++ ) {
         screentimes[i].base = screenreg;
         screentimes[i].t = get_absolute_time();
     }
 
     setup_pixelpointers();
+    draw_test_pattern_stlow();
 
     // create a semaphore to be posted when video init is complete
     sem_init(&video_initted, 0, 1);
+
 
     // launch all the video on core 1, so it isn't affected by USB handling on core 0
     multicore_launch_core1(core1_func);
@@ -224,14 +235,21 @@ int main(void) {
     // wait for initialization of video to be complete
     sem_acquire_blocking(&video_initted);
 
+    //sleep_ms(5000);
+
     PIO pio = pio1;
     uint offset = pio_add_program(pio, &clocked_input_program);
     uint sm = pio_claim_unused_sm(pio, true);
 
+    // Load the clocked_input program, and configure a free state machine
+    // to run the program.
+    clocked_input_program_init(pio, sm, offset, PIO_INPUT_PIN_BASE);
+
+
     // Grant high bus priority to the DMA, so it can shove the processors out
     // of the way. This should only be needed if you are pushing things up to
     // >16bits/clk here, i.e. if you need to saturate the bus completely.
-#define DMAPRIORITY 1
+#define DMAPRIORITY 0
 #ifdef DMAPRIORITY
     bus_ctrl_hw->priority = BUSCTRL_BUS_PRIORITY_DMA_W_BITS | BUSCTRL_BUS_PRIORITY_DMA_R_BITS;
 #endif
@@ -281,33 +299,27 @@ int main(void) {
     irq_set_exclusive_handler(DMA_IRQ_1, dma_handler);
     irq_set_enabled(DMA_IRQ_1, true);
 
-    // Load the clocked_input program, and configure a free state machine
-    // to run the program.
-    clocked_input_program_init(pio, sm, offset, PIO_INPUT_PIN_BASE);
-
+/*
     printf( "red =   %4.4x\n", PICO_SCANVIDEO_PIXEL_FROM_RGB5(0xf, 0x0, 0x0) );
     printf( "green = %4.4x\n", PICO_SCANVIDEO_PIXEL_FROM_RGB5(0x0, 0xf, 0x0) );
     printf( "blue =  %4.4x\n", PICO_SCANVIDEO_PIXEL_FROM_RGB5(0x0, 0x0, 0xf) );
 
     printf("Listening...\n");
-
+*/
     uint32_t oldreg = screenreg;
-    screenbase = screenreg;
+    uint64_t oldvbl = _vbls;
+    screenbase = screenreg; // seems to result in hangs half the time -- WTF? I don't think this is in use in interrupts or on the other core
 
-    absolute_time_t t1, t2;
-    t1 = get_absolute_time();
+    for(int i = 0 ; i < QUEUELEN ; i++)
+        parsequeue[i] = -1;
+
     for( ;; ) {
-        
-        if( parsequeue[queueread] >= 0 ) {
-            parsebuf(parsequeue[queueread]);
-            parsequeue[queueread] = -1;
-            queueread = (queueread+1) % QUEUELEN;
-        }
-    continue;
-        t2 = get_absolute_time();
-        if( absolute_time_diff_us( t1, t2 ) < 20000 )
+
+        parsecheck();
+
+        if( _vbls < oldvbl + 1 )
             continue;
-        t1 = t2;
+        oldvbl = _vbls;
 
 //        sleep_ms(20);
         uint8_t *src = pixin[0];
@@ -319,7 +331,6 @@ int main(void) {
                 p2c_4bpp( pixout, X*Y, src );
                 break;
         }
-
         if( screenreg != oldreg ) {
             for( int i = SCREENHIST-1 ; i >= 1 ; i-- )
                 screentimes[i] = screentimes[i-1];
@@ -557,173 +568,6 @@ static void dma_handler() {
 #endif
 
 
-void core1_func() {
-    // initialize video and interrupts on core 1
-    //scanvideo_setup(&vga_mode_320x240_60);
-    //scanvideo_setup(&vga_mode_800x600_54);
-    scanvideo_setup(&vga_mode_local);
-    scanvideo_timing_enable(true);
-    sem_release(&video_initted);
-
-    short oldrez = 0;
-    for(;;) {
-        do {
-            scanvideo_scanline_buffer_t *scanline_buffer = scanvideo_begin_scanline_generation(true);
-            if( rez == 0 )
-                vga_320200_16_planar(scanline_buffer);
-            else
-                vga_640200_4_planar(scanline_buffer);        
-            scanvideo_end_scanline_generation(scanline_buffer);
-
-        } while( rez == oldrez );
-        // this iswhere res change would go, if it worked.
-        oldrez = rez;
-    }
-
-}
-
-void vga_320200_16_planar(scanvideo_scanline_buffer_t *buffer) {
-
-    uint line_num = scanvideo_scanline_number(buffer->scanline_id);
-    uint16_t *p = (uint16_t *) buffer->data;
-
-    uint linenum_virt = line_num;// /2;
-    short REALX = X; // *2;
-
-    linenum_virt -= 20;
-    if( linenum_virt < 0 || linenum_virt >= 200 ) { // blank
-        *p++ = COMPOSABLE_COLOR_RUN;
-        *p++ = palette[0];
-        *p++ = REALX - 3;
-    }
-    else {
-        uint32_t colidx;
-        uint32_t *src = (uint32_t*)(pixout+(linenum_virt*X/2)); // 4bpp -- two pix per byte, but second half of framebuffer (for background p2c)
-
-        *p++ = COMPOSABLE_RAW_RUN;
-        
-        colidx = *src++;
-        *p++ = palette[(colidx >> 0)&0xf];
-        *p++ = REALX - 3;
-//        *p++ = palette[(colidx >> 0)&0xf];
-
-        *p++ = palette[(colidx >> 4)&0xf];
-//        *p++ = palette[(colidx >> 4)&0xf];
-
-        *p++ = palette[(colidx >> 8)&0xf];
-//        *p++ = palette[(colidx >> 8)&0xf];
-
-        *p++ = palette[(colidx >> 12)&0xf];
-//        *p++ = palette[(colidx >> 12)&0xf];
-
-        *p++ = palette[(colidx >> 16)&0xf];
-//        *p++ = palette[(colidx >> 16)&0xf];
-
-        *p++ = palette[(colidx >> 20)&0xf];
-//        *p++ = palette[(colidx >> 20)&0xf];
-
-        *p++ = palette[(colidx >> 24)&0xf];
-//        *p++ = palette[(colidx >> 24)&0xf];
-
-        *p++ = palette[(colidx >> 28)&0xf];
-//        *p++ = palette[(colidx >> 28)&0xf];
-
-        for( int i = 8 ; i < X ; i+=8 ) {
-            colidx = *src++;            
-            *p++ = palette[(colidx >> 0)&0xf];
-//            *p++ = palette[(colidx >> 0)&0xf];
-
-            *p++ = palette[(colidx >> 4)&0xf];
-//            *p++ = palette[(colidx >> 4)&0xf];
-
-            *p++ = palette[(colidx >> 8)&0xf];
-//            *p++ = palette[(colidx >> 8)&0xf];
-
-            *p++ = palette[(colidx >> 12)&0xf];
-//            *p++ = palette[(colidx >> 12)&0xf];
-
-            *p++ = palette[(colidx >> 16)&0xf];
-//            *p++ = palette[(colidx >> 16)&0xf];
-
-            *p++ = palette[(colidx >> 20)&0xf];
-//            *p++ = palette[(colidx >> 20)&0xf];
-
-            *p++ = palette[(colidx >> 24)&0xf];
-//            *p++ = palette[(colidx >> 24)&0xf];
-
-            *p++ = palette[(colidx >> 28)&0xf];
-//            *p++ = palette[(colidx >> 28)&0xf];
-        }
-    }
-
-
-    // black pixel to end line
-    *p++ = COMPOSABLE_RAW_1P;
-    *p++ = 0;
-    // end of line with alignment padding
-    *p++ = COMPOSABLE_EOL_SKIP_ALIGN;
-    *p++ = 0;
-
-    buffer->data_used = ((uint32_t *) p) - buffer->data;
-    buffer->status = SCANLINE_OK;
-}
-
-void vga_640200_4_planar(scanvideo_scanline_buffer_t *buffer) {
-
-    uint line_num = scanvideo_scanline_number(buffer->scanline_id);
-    uint16_t *p = (uint16_t *) buffer->data;
-    uint linenum_virt = line_num / 2;
-
-    linenum_virt -= 20;
-    if( linenum_virt < 0 || linenum_virt >= 200 ) { // blank
-        *p++ = COMPOSABLE_COLOR_RUN;
-        //*p++ = doublebuf ? 0x0fff : 0x0000;
-        *p++ = 0x0000;
-        *p++ = X - 3;
-    }
-    else {
-        uint32_t colidx;
-        uint32_t *src = (uint32_t*)(pixout+(linenum_virt*X/4)); // 2bpp -- four pix per byte
-
-        *p++ = COMPOSABLE_RAW_RUN;
-
-        for( int i = 0 ; i < /*X*/ 320 ; i += 16 ) {
-            colidx = *src++;            
-            *p++ = palette[(colidx >> 0)&0x3];
-            if( i == 0 )
-                *p++ = X-3;
-            *p++ = palette[(colidx >> 2)&0x3];
-            *p++ = palette[(colidx >> 4)&0x3];
-            *p++ = palette[(colidx >> 6)&0x3];
-
-            *p++ = palette[(colidx >> 8)&0x3];
-            *p++ = palette[(colidx >> 10)&0x3];
-            *p++ = palette[(colidx >> 12)&0x3];
-            *p++ = palette[(colidx >> 14)&0x3];
-
-            *p++ = palette[(colidx >> 16)&0x3];
-            *p++ = palette[(colidx >> 18)&0x3];
-            *p++ = palette[(colidx >> 20)&0x3];
-            *p++ = palette[(colidx >> 22)&0x3];
-
-            *p++ = palette[(colidx >> 24)&0x3];
-            *p++ = palette[(colidx >> 26)&0x3];
-            *p++ = palette[(colidx >> 28)&0x3];
-            *p++ = palette[(colidx >> 30)&0x3];
-        }
-    }
-
-    // black pixel to end line
-    *p++ = COMPOSABLE_RAW_1P;
-    *p++ = 0;
-    // end of line with alignment padding
-    *p++ = COMPOSABLE_EOL_SKIP_ALIGN;
-    *p++ = 0;
-
-    buffer->data_used = ((uint32_t *) p) - buffer->data;
-    buffer->status = SCANLINE_OK;
-}
-
 void clear_screen() {
     // clear screen to white    
     memset( pixels, 0xff, X*Y*DEPTH/8 );
@@ -829,6 +673,10 @@ void p2c_4bpp( uint8_t *outpix, int pixels_to_convert, uint8_t *in ) {
     uint16_t plane[4];
 
     for( int pixel = 0 ; pixel < pixels_to_convert ; pixel += 16 ) {
+
+        if( pixel % 320  == 0 )
+            parsecheck();
+
         plane[0] = *block++;
         plane[1] = *block++;
         plane[2] = *block++;
@@ -863,6 +711,11 @@ void p2c_2bpp( uint8_t *outpix, int pixels_to_convert, uint8_t *in ) {
     uint16_t plane[2];
 
     for( int pixel = 0 ; pixel < pixels_to_convert ; pixel += 16 ) {
+        
+        if( pixel % 640  == 0 )
+            parsecheck();
+
+        
         plane[0] = *block++;
         plane[1] = *block++;
 
@@ -885,4 +738,179 @@ void p2c_2bpp( uint8_t *outpix, int pixels_to_convert, uint8_t *in ) {
         *(outpix++) = (pix[3] << 6) | (pix[2] << 4 ) | (pix[1] << 2) | pix[0];
         *(outpix++) = (pix[7] << 6) | (pix[6] << 4 ) | (pix[5] << 2) | pix[4];
     }    
+}
+
+
+/** CORE 1 **/
+
+void core1_func() {
+    // initialize video and interrupts on core 1
+    //scanvideo_setup(&vga_mode_320x240_60);
+    //scanvideo_setup(&vga_mode_800x600_54);
+    scanvideo_setup(&vga_mode_local);
+    scanvideo_timing_enable(true);
+    sem_release(&video_initted);
+
+    short oldrez = 0;
+    uint line_num;
+    for(;;) {
+        do {
+            scanvideo_scanline_buffer_t *scanline_buffer = scanvideo_begin_scanline_generation(true);
+            line_num = scanvideo_scanline_number(scanline_buffer->scanline_id);
+            if( rez == 0 )
+                vga_320200_16_planar(scanline_buffer);
+            else
+                vga_640200_4_planar(scanline_buffer);        
+            scanvideo_end_scanline_generation(scanline_buffer);
+            if( line_num == Y ) {
+                _vbls++;
+            }
+
+        } while( rez == oldrez );
+        // this iswhere res change would go, if it worked.
+        oldrez = rez;
+    }
+
+}
+
+void vga_320200_16_planar(scanvideo_scanline_buffer_t *buffer) {
+
+    uint line_num = scanvideo_scanline_number(buffer->scanline_id);
+    uint16_t *p = (uint16_t *) buffer->data;
+
+    uint linenum_virt = line_num;// /2;
+    short REALX = X; // *2;
+
+    linenum_virt -= 20;
+    if( linenum_virt < 0 || linenum_virt >= 200 ) { // blank
+        *p++ = COMPOSABLE_COLOR_RUN;
+        *p++ = palette[0];
+        *p++ = REALX - 3;
+    }
+    else {
+        uint32_t colidx;
+        uint32_t *src = (uint32_t*)(pixout+(linenum_virt*X/2)); // 4bpp -- two pix per byte, but second half of framebuffer (for background p2c)
+
+        *p++ = COMPOSABLE_RAW_RUN;
+        
+        colidx = *src++;
+        *p++ = palette[(colidx >> 0)&0xf];
+        *p++ = REALX - 3;
+//        *p++ = palette[(colidx >> 0)&0xf];
+
+        *p++ = palette[(colidx >> 4)&0xf];
+//        *p++ = palette[(colidx >> 4)&0xf];
+
+        *p++ = palette[(colidx >> 8)&0xf];
+//        *p++ = palette[(colidx >> 8)&0xf];
+
+        *p++ = palette[(colidx >> 12)&0xf];
+//        *p++ = palette[(colidx >> 12)&0xf];
+
+        *p++ = palette[(colidx >> 16)&0xf];
+//        *p++ = palette[(colidx >> 16)&0xf];
+
+        *p++ = palette[(colidx >> 20)&0xf];
+//        *p++ = palette[(colidx >> 20)&0xf];
+
+        *p++ = palette[(colidx >> 24)&0xf];
+//        *p++ = palette[(colidx >> 24)&0xf];
+
+        *p++ = palette[(colidx >> 28)&0xf];
+//        *p++ = palette[(colidx >> 28)&0xf];
+
+        for( int i = 8 ; i < X ; i+=8 ) {
+            colidx = *src++;            
+            *p++ = palette[(colidx >> 0)&0xf];
+//            *p++ = palette[(colidx >> 0)&0xf];
+
+            *p++ = palette[(colidx >> 4)&0xf];
+//            *p++ = palette[(colidx >> 4)&0xf];
+
+            *p++ = palette[(colidx >> 8)&0xf];
+//            *p++ = palette[(colidx >> 8)&0xf];
+
+            *p++ = palette[(colidx >> 12)&0xf];
+//            *p++ = palette[(colidx >> 12)&0xf];
+
+            *p++ = palette[(colidx >> 16)&0xf];
+//            *p++ = palette[(colidx >> 16)&0xf];
+
+            *p++ = palette[(colidx >> 20)&0xf];
+//            *p++ = palette[(colidx >> 20)&0xf];
+
+            *p++ = palette[(colidx >> 24)&0xf];
+//            *p++ = palette[(colidx >> 24)&0xf];
+
+            *p++ = palette[(colidx >> 28)&0xf];
+//            *p++ = palette[(colidx >> 28)&0xf];
+        }
+    }
+
+
+    // black pixel to end line
+    *p++ = COMPOSABLE_RAW_1P;
+    *p++ = 0;
+    // end of line with alignment padding
+    *p++ = COMPOSABLE_EOL_SKIP_ALIGN;
+    *p++ = 0;
+
+    buffer->data_used = ((uint32_t *) p) - buffer->data;
+    buffer->status = SCANLINE_OK;
+}
+
+void vga_640200_4_planar(scanvideo_scanline_buffer_t *buffer) {
+
+    uint line_num = scanvideo_scanline_number(buffer->scanline_id);
+    uint16_t *p = (uint16_t *) buffer->data;
+    uint linenum_virt = line_num ;// / 2;
+
+    linenum_virt -= 20;
+    if( linenum_virt < 0 || linenum_virt >= 200 ) { // blank
+        *p++ = COMPOSABLE_COLOR_RUN;
+        //*p++ = doublebuf ? 0x0fff : 0x0000;
+        *p++ = 0x0000;
+        *p++ = X - 3;
+    }
+    else {
+        uint32_t colidx;
+        uint32_t *src = (uint32_t*)(pixout+(linenum_virt*X/4)); // 2bpp -- four pix per byte
+
+        *p++ = COMPOSABLE_RAW_RUN;
+
+        for( int i = 0 ; i < /*X*/ 320 ; i += 16 ) {
+            colidx = *src++;            
+            *p++ = palette[(colidx >> 0)&0x3];
+            if( i == 0 )
+                *p++ = X-3;
+            *p++ = palette[(colidx >> 2)&0x3];
+            *p++ = palette[(colidx >> 4)&0x3];
+            *p++ = palette[(colidx >> 6)&0x3];
+
+            *p++ = palette[(colidx >> 8)&0x3];
+            *p++ = palette[(colidx >> 10)&0x3];
+            *p++ = palette[(colidx >> 12)&0x3];
+            *p++ = palette[(colidx >> 14)&0x3];
+
+            *p++ = palette[(colidx >> 16)&0x3];
+            *p++ = palette[(colidx >> 18)&0x3];
+            *p++ = palette[(colidx >> 20)&0x3];
+            *p++ = palette[(colidx >> 22)&0x3];
+
+            *p++ = palette[(colidx >> 24)&0x3];
+            *p++ = palette[(colidx >> 26)&0x3];
+            *p++ = palette[(colidx >> 28)&0x3];
+            *p++ = palette[(colidx >> 30)&0x3];
+        }
+    }
+
+    // black pixel to end line
+    *p++ = COMPOSABLE_RAW_1P;
+    *p++ = 0;
+    // end of line with alignment padding
+    *p++ = COMPOSABLE_EOL_SKIP_ALIGN;
+    *p++ = 0;
+
+    buffer->data_used = ((uint32_t *) p) - buffer->data;
+    buffer->status = SCANLINE_OK;
 }
