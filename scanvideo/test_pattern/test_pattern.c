@@ -35,8 +35,8 @@ void p2c_4bpp( uint8_t *outpix, int pixels_to_convert, uint8_t *in );
 void p2c_2bpp( uint8_t *outpix, int pixels_to_convert, uint8_t *in );
 
 
-void vga_320200_16_planar(scanvideo_scanline_buffer_t *buffer);
-void vga_640200_4_planar(scanvideo_scanline_buffer_t *buffer);
+void vga_320200_4_planar(scanvideo_scanline_buffer_t *buffer);
+void vga_640200_2_planar(scanvideo_scanline_buffer_t *buffer);
 void draw_test_pattern_stlow();
 void clear_screen();
 
@@ -758,9 +758,9 @@ void core1_func() {
             scanvideo_scanline_buffer_t *scanline_buffer = scanvideo_begin_scanline_generation(true);
             line_num = scanvideo_scanline_number(scanline_buffer->scanline_id);
             if( rez == 0 )
-                vga_320200_16_planar(scanline_buffer);
+                vga_320200_4_planar(scanline_buffer);
             else
-                vga_640200_4_planar(scanline_buffer);        
+                vga_640200_2_planar(scanline_buffer);        
             scanvideo_end_scanline_generation(scanline_buffer);
             if( line_num == Y ) {
                 _vbls++;
@@ -773,7 +773,7 @@ void core1_func() {
 
 }
 
-void vga_320200_16_planar(scanvideo_scanline_buffer_t *buffer) {
+void vga_320200_4_planar(scanvideo_scanline_buffer_t *buffer) {
 
     uint line_num = scanvideo_scanline_number(buffer->scanline_id);
     uint16_t *p = (uint16_t *) buffer->data;
@@ -782,7 +782,7 @@ void vga_320200_16_planar(scanvideo_scanline_buffer_t *buffer) {
     short REALX = X; // *2;
 
     linenum_virt -= 20;
-    if( linenum_virt < 0 || linenum_virt >= 200 ) { // blank
+    if( linenum_virt < 0 || linenum_virt >= Y ) { // blank
         *p++ = COMPOSABLE_COLOR_RUN;
         *p++ = palette[0];
         *p++ = REALX - 3;
@@ -847,7 +847,6 @@ void vga_320200_16_planar(scanvideo_scanline_buffer_t *buffer) {
         }
     }
 
-
     // black pixel to end line
     *p++ = COMPOSABLE_RAW_1P;
     *p++ = 0;
@@ -859,7 +858,7 @@ void vga_320200_16_planar(scanvideo_scanline_buffer_t *buffer) {
     buffer->status = SCANLINE_OK;
 }
 
-void vga_640200_4_planar(scanvideo_scanline_buffer_t *buffer) {
+void vga_640200_2_planar(scanvideo_scanline_buffer_t *buffer) {
 
     uint line_num = scanvideo_scanline_number(buffer->scanline_id);
     uint16_t *p = (uint16_t *) buffer->data;
