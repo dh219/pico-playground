@@ -34,9 +34,10 @@ void parsebuf( short );
 void p2c_4bpp( uint8_t *outpix, int pixels_to_convert, uint8_t *in );
 void p2c_2bpp( uint8_t *outpix, int pixels_to_convert, uint8_t *in );
 
-
+void volatile (*scanline_renderer)(scanvideo_scanline_buffer_t *buffer);
 void vga_320200_4_planar(scanvideo_scanline_buffer_t *buffer);
 void vga_640200_2_planar(scanvideo_scanline_buffer_t *buffer);
+void vga_640480_4_planar(scanvideo_scanline_buffer_t *buffer);
 void draw_test_pattern_stlow();
 void clear_screen();
 
@@ -50,7 +51,9 @@ static semaphore_t video_initted;
 static bool invert;
 static volatile uint dma_chan[2];
 static volatile bool doublebuf = false;
-static volatile uint8_t rez = 0x0;
+static volatile uint8_t rez = 0;
+
+static struct scanvideo_mode *current_mode;
 
 #define QUEUELEN 0x10
 static volatile short queueread = 0;
@@ -77,7 +80,8 @@ static volatile uint64_t _vbls = 0;
 static short X = 320;
 static short Y = 200;
 static short DEPTH = 4;
-static uint8_t pixels[MAXX*MAXY*MAXDEPTH/8]; // ST resolutions are all the same (for now) // max 640*320 = 204800 bytes
+//static uint8_t pixels[MAXX*MAXY*MAXDEPTH/8]; // ST resolutions are all the same (for now) // max 640*320 = 204800 bytes
+static uint8_t pixels[400000]; // ST resolutions are all the same (for now) // max 640*320 = 204800 bytes
 static uint8_t *pixout;
 static uint8_t *pixin[2];
 
@@ -144,7 +148,7 @@ struct scanvideo_timing vga_timing_640x480_60_local =
 };
 
 extern const struct scanvideo_pio_program video_24mhz_composable;
-struct scanvideo_mode  vga_mode_local =
+struct scanvideo_mode  vga_mode_320240 =
 {
     .default_timing = &vga_timing_640x480_60_local,
     .pio_program = &video_24mhz_composable,
@@ -153,16 +157,42 @@ struct scanvideo_mode  vga_mode_local =
     .xscale = 2,
     .yscale = 2,
 };
+struct scanvideo_mode  vga_mode_640240 =
+{
+    .default_timing = &vga_timing_640x480_60_local,
+    .pio_program = &video_24mhz_composable,
+    .width = 640,
+    .height = 480,
+    .xscale = 1,
+    .yscale = 2,
+};
+struct scanvideo_mode  vga_mode_640480 =
+{
+    .default_timing = &vga_timing_640x480_60_local,
+    .pio_program = &video_24mhz_composable,
+    .width = 640,
+    .height = 480,
+    .xscale = 1,
+    .yscale = 1,
+};
 
 void setup_pixelpointers() {
     
     if( rez <= 2 ) {
         uint32_t sz = X*Y*DEPTH/8;
 
-        assert( sz * 3 < sizeof( pixels ) );
+        assert( sz * 3 <= sizeof( pixels ) );
         pixin[0] = pixels;
         pixin[1] = pixels+sz;
         pixout = pixels + 2*sz;
+    }
+    else if( rez == 4 || rez == 5 ) {
+        uint32_t sz = X*Y*DEPTH/8;
+
+        assert( sz * 2 <= sizeof( pixels ) );
+        pixin[0] = pixels;
+        pixin[1] = NULL;
+        pixout = pixels+sz;
     }
     else {
         pixin[0] = pixels;
@@ -185,6 +215,39 @@ void parsecheck() {
         parsequeue[queueread] = -1;
         queueread = (queueread+1) % QUEUELEN;
     }
+}
+
+void setup_resolution(int rez) {
+        switch( rez ) {
+            case(4):
+            case(5):
+                X = 640;
+                //Y = 464;
+                Y = 480;
+                DEPTH = 4;
+                scanline_renderer = &vga_640480_4_planar;
+                break;
+            case(2):
+                X = 640;
+                Y = 400;
+                DEPTH = 1;
+                scanline_renderer = &vga_640480_4_planar;
+                break;
+            case(1):
+                X = 640;
+                Y = 200;
+                DEPTH = 2;
+                scanline_renderer = &vga_640200_2_planar;
+                break;
+            case(0):
+            default:
+                X = 320;
+                Y = 200;
+                DEPTH = 4;
+                scanline_renderer = &vga_320200_4_planar;
+                break;
+        }
+        setup_pixelpointers();
 }
 
 int main(void) {
@@ -222,7 +285,8 @@ int main(void) {
         screentimes[i].t = get_absolute_time();
     }
 
-    setup_pixelpointers();
+
+    setup_resolution(rez);
     draw_test_pattern_stlow();
 
     // create a semaphore to be posted when video init is complete
@@ -321,12 +385,14 @@ int main(void) {
             continue;
         oldvbl = _vbls;
 
-//        sleep_ms(20);
         uint8_t *src = pixin[0];
         switch( rez ) {
             case(1):
                 p2c_2bpp( pixout, X*Y, src );
                 break;
+            case(0):
+            case(4):
+            case(5):
             default:
                 p2c_4bpp( pixout, X*Y, src );
                 break;
@@ -362,6 +428,7 @@ static int32_t rxdata[5];
 #define STPALMASK   0xffffc0
 
 #define STRESSET    0xff8260
+#define DDB1REG     0xf1ddb0
 
 void writemem( short bufinuse ) {
     uint32_t add;
@@ -422,26 +489,8 @@ void writemem( short bufinuse ) {
         return;
     }
     else if( (add == STRESSET) ) {
-        rez = datah & 0x3;
-        switch( rez ) {
-            case(2):
-                X = 640;
-                Y = 400;
-                DEPTH = 1;
-                break;
-            case(1):
-                X = 640;
-                Y = 200;
-                DEPTH = 2;
-                break;
-            case(0):
-            default:
-                X = 320;
-                Y = 200;
-                DEPTH = 4;
-                break;
-        }
-        setup_pixelpointers();
+        rez = datah & 0x7;
+        setup_resolution(rez);
     }
     else if( (add & STPALMASK) == STPALETTE ) {
         uint32_t index = ( add - STPALETTE )>>1;
@@ -457,6 +506,10 @@ void writemem( short bufinuse ) {
             palette[index] |= ( red );
         }
         return;
+    }
+    else if( add == DDB1REG && low ) {
+        rez = datal & 1 ? 0x4 : 0x0;
+        setup_resolution(rez);
     }
 
 }
@@ -741,34 +794,87 @@ void p2c_2bpp( uint8_t *outpix, int pixels_to_convert, uint8_t *in ) {
 }
 
 
+
+
+/* VIDEO */
+
+static void vga_scanvideo_switch(struct scanvideo_mode *vga_scanvideo_mode_selected)
+{
+    /* Bulk of this function comes from Rumbledethumps' Picocomputer 6502 */
+    /* https://github.com/picocomputer/rp6502/ */
+
+    /* Warning that there may be memory leak present in scanvideo_setup() */
+    /* This could limit the number of resolution changes */
+
+    // Stop and release resources previously held by scanvideo_setup()
+    for (int i = 0; i < 3; i++)
+    {
+        dma_channel_abort(i);
+        if (dma_channel_is_claimed(i))
+            dma_channel_unclaim(i);
+    }
+    pio_clear_instruction_memory(pio0);
+
+    // scanvideo_timing_enable is almost able to stop itself
+    for (int sm = 0; sm < 4; sm++)
+        if (pio_sm_is_claimed(pio0, sm))
+            pio_sm_unclaim(pio0, sm);
+    scanvideo_timing_enable(false);
+    for (int sm = 0; sm < 4; sm++)
+        if (pio_sm_is_claimed(pio0, sm))
+            pio_sm_unclaim(pio0, sm);
+
+/* Not sure about this so not including for now */
+/*
+    // begin scanvideo setup with clock setup
+    uint32_t clk = vga_scanvideo_mode_selected->default_timing->clock_freq;
+    if (clk == 25200000)
+        clk = 25200000 * 8; // 201.6 MHz
+    else if (clk == 54000000)
+        clk = 54000000 * 4; // 216.0 MHz
+    else if (clk == 37125000)
+        clk = 37125000 * 4; // 148.5 MHz
+    assert(clk >= 120000000 && clk <= 266000000);
+    if (clk != clock_get_hz(clk_sys))
+    {
+        main_flush();
+        set_sys_clock_khz(clk / 1000, true);
+        main_reclock();
+    }
+*/
+    // These two calls are the main scanvideo startup.
+    // There's a memory leak in scanvideo_setup which is
+    // patched in the fork we use.
+
+    scanvideo_setup(vga_scanvideo_mode_selected);
+    scanvideo_timing_enable(true);
+}
+
+
 /** CORE 1 **/
 
 void core1_func() {
     // initialize video and interrupts on core 1
     //scanvideo_setup(&vga_mode_320x240_60);
     //scanvideo_setup(&vga_mode_800x600_54);
-    scanvideo_setup(&vga_mode_local);
+    
+    current_mode = &vga_mode_640480;
+    scanvideo_setup(current_mode);
     scanvideo_timing_enable(true);
     sem_release(&video_initted);
 
-    short oldrez = 0;
     uint line_num;
     for(;;) {
         do {
             scanvideo_scanline_buffer_t *scanline_buffer = scanvideo_begin_scanline_generation(true);
             line_num = scanvideo_scanline_number(scanline_buffer->scanline_id);
-            if( rez == 0 )
-                vga_320200_4_planar(scanline_buffer);
-            else
-                vga_640200_2_planar(scanline_buffer);        
+            scanline_renderer(scanline_buffer);
             scanvideo_end_scanline_generation(scanline_buffer);
-            if( line_num == Y ) {
-                _vbls++;
-            }
-
-        } while( rez == oldrez );
-        // this iswhere res change would go, if it worked.
-        oldrez = rez;
+        
+        //} while( line_num != 0 );
+        //} while( line_num != PICO_SCANVIDEO_SCANLINE_BUFFER_COUNT-1 );
+        } while( line_num != ( current_mode->height / current_mode->yscale )-1 );
+        _vbls++;
     }
 
 }
@@ -778,10 +884,10 @@ void vga_320200_4_planar(scanvideo_scanline_buffer_t *buffer) {
     uint line_num = scanvideo_scanline_number(buffer->scanline_id);
     uint16_t *p = (uint16_t *) buffer->data;
 
-    uint linenum_virt = line_num;// /2;
-    short REALX = X; // *2;
+    uint linenum_virt = line_num / 2;
+    short REALX = X * 2;
 
-    linenum_virt -= 20;
+    linenum_virt -= (current_mode->height/2 - Y ) / 2;
     if( linenum_virt < 0 || linenum_virt >= Y ) { // blank
         *p++ = COMPOSABLE_COLOR_RUN;
         *p++ = palette[0];
@@ -796,54 +902,54 @@ void vga_320200_4_planar(scanvideo_scanline_buffer_t *buffer) {
         colidx = *src++;
         *p++ = palette[(colidx >> 0)&0xf];
         *p++ = REALX - 3;
-//        *p++ = palette[(colidx >> 0)&0xf];
+        *p++ = palette[(colidx >> 0)&0xf];
 
         *p++ = palette[(colidx >> 4)&0xf];
-//        *p++ = palette[(colidx >> 4)&0xf];
+        *p++ = palette[(colidx >> 4)&0xf];
 
         *p++ = palette[(colidx >> 8)&0xf];
-//        *p++ = palette[(colidx >> 8)&0xf];
+        *p++ = palette[(colidx >> 8)&0xf];
 
         *p++ = palette[(colidx >> 12)&0xf];
-//        *p++ = palette[(colidx >> 12)&0xf];
+        *p++ = palette[(colidx >> 12)&0xf];
 
         *p++ = palette[(colidx >> 16)&0xf];
-//        *p++ = palette[(colidx >> 16)&0xf];
+        *p++ = palette[(colidx >> 16)&0xf];
 
         *p++ = palette[(colidx >> 20)&0xf];
-//        *p++ = palette[(colidx >> 20)&0xf];
+        *p++ = palette[(colidx >> 20)&0xf];
 
         *p++ = palette[(colidx >> 24)&0xf];
-//        *p++ = palette[(colidx >> 24)&0xf];
+        *p++ = palette[(colidx >> 24)&0xf];
 
         *p++ = palette[(colidx >> 28)&0xf];
-//        *p++ = palette[(colidx >> 28)&0xf];
+        *p++ = palette[(colidx >> 28)&0xf];
 
         for( int i = 8 ; i < X ; i+=8 ) {
             colidx = *src++;            
             *p++ = palette[(colidx >> 0)&0xf];
-//            *p++ = palette[(colidx >> 0)&0xf];
+            *p++ = palette[(colidx >> 0)&0xf];
 
             *p++ = palette[(colidx >> 4)&0xf];
-//            *p++ = palette[(colidx >> 4)&0xf];
+            *p++ = palette[(colidx >> 4)&0xf];
 
             *p++ = palette[(colidx >> 8)&0xf];
-//            *p++ = palette[(colidx >> 8)&0xf];
+            *p++ = palette[(colidx >> 8)&0xf];
 
             *p++ = palette[(colidx >> 12)&0xf];
-//            *p++ = palette[(colidx >> 12)&0xf];
+            *p++ = palette[(colidx >> 12)&0xf];
 
             *p++ = palette[(colidx >> 16)&0xf];
-//            *p++ = palette[(colidx >> 16)&0xf];
+            *p++ = palette[(colidx >> 16)&0xf];
 
             *p++ = palette[(colidx >> 20)&0xf];
-//            *p++ = palette[(colidx >> 20)&0xf];
+            *p++ = palette[(colidx >> 20)&0xf];
 
             *p++ = palette[(colidx >> 24)&0xf];
-//            *p++ = palette[(colidx >> 24)&0xf];
+            *p++ = palette[(colidx >> 24)&0xf];
 
             *p++ = palette[(colidx >> 28)&0xf];
-//            *p++ = palette[(colidx >> 28)&0xf];
+            *p++ = palette[(colidx >> 28)&0xf];
         }
     }
 
@@ -855,6 +961,7 @@ void vga_320200_4_planar(scanvideo_scanline_buffer_t *buffer) {
     *p++ = 0;
 
     buffer->data_used = ((uint32_t *) p) - buffer->data;
+//    buffer->data_used = 650;
     buffer->status = SCANLINE_OK;
 }
 
@@ -862,9 +969,9 @@ void vga_640200_2_planar(scanvideo_scanline_buffer_t *buffer) {
 
     uint line_num = scanvideo_scanline_number(buffer->scanline_id);
     uint16_t *p = (uint16_t *) buffer->data;
-    uint linenum_virt = line_num ;// / 2;
+    uint linenum_virt = line_num / 2;
 
-    linenum_virt -= 20;
+    linenum_virt -= (current_mode->height/2 - Y ) / 2;
     if( linenum_virt < 0 || linenum_virt >= 200 ) { // blank
         *p++ = COMPOSABLE_COLOR_RUN;
         //*p++ = doublebuf ? 0x0fff : 0x0000;
@@ -877,7 +984,7 @@ void vga_640200_2_planar(scanvideo_scanline_buffer_t *buffer) {
 
         *p++ = COMPOSABLE_RAW_RUN;
 
-        for( int i = 0 ; i < /*X*/ 320 ; i += 16 ) {
+        for( int i = 0 ; i < X ; i += 16 ) {
             colidx = *src++;            
             *p++ = palette[(colidx >> 0)&0x3];
             if( i == 0 )
@@ -912,4 +1019,71 @@ void vga_640200_2_planar(scanvideo_scanline_buffer_t *buffer) {
 
     buffer->data_used = ((uint32_t *) p) - buffer->data;
     buffer->status = SCANLINE_OK;
+}
+
+void vga_640480_4_planar(scanvideo_scanline_buffer_t *buffer) {
+    uint line_num = scanvideo_scanline_number(buffer->scanline_id);
+    uint16_t *p = (uint16_t *) buffer->data;
+
+    uint linenum_virt = line_num;
+    short REALX = X;
+
+    if( linenum_virt < 0 || linenum_virt >= Y ) { // blank
+        *p++ = COMPOSABLE_COLOR_RUN;
+        *p++ = palette[2];
+        *p++ = REALX - 3;
+    }
+    else {
+        uint32_t colidx;
+        uint32_t *src = (uint32_t*)(pixout+(linenum_virt*X/2)); // 4bpp -- two pix per byte
+
+        *p++ = COMPOSABLE_RAW_RUN;
+        
+        colidx = *src++;
+        *p++ = palette[(colidx >> 0)&0xf];
+        *p++ = REALX - 3;
+
+        *p++ = palette[(colidx >> 4)&0xf];
+
+        *p++ = palette[(colidx >> 8)&0xf];
+
+        *p++ = palette[(colidx >> 12)&0xf];
+
+        *p++ = palette[(colidx >> 16)&0xf];
+
+        *p++ = palette[(colidx >> 20)&0xf];
+
+        *p++ = palette[(colidx >> 24)&0xf];
+
+        *p++ = palette[(colidx >> 28)&0xf];
+
+        for( int i = 8 ; i < X ; i+=8 ) {
+            colidx = *src++;            
+            *p++ = palette[(colidx >> 0)&0xf];
+
+            *p++ = palette[(colidx >> 4)&0xf];
+
+            *p++ = palette[(colidx >> 8)&0xf];
+
+            *p++ = palette[(colidx >> 12)&0xf];
+
+            *p++ = palette[(colidx >> 16)&0xf];
+
+            *p++ = palette[(colidx >> 20)&0xf];
+
+            *p++ = palette[(colidx >> 24)&0xf];
+
+            *p++ = palette[(colidx >> 28)&0xf];
+        }
+    }
+
+    // black pixel to end line
+    *p++ = COMPOSABLE_RAW_1P;
+    *p++ = 0;
+    // end of line with alignment padding
+    *p++ = COMPOSABLE_EOL_SKIP_ALIGN;
+    *p++ = 0;
+
+    buffer->data_used = ((uint32_t *) p) - buffer->data;
+    buffer->status = SCANLINE_OK;    
 }
