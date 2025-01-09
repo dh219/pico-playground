@@ -35,9 +35,9 @@ void p2c_4bpp( uint8_t *outpix, int pixels_to_convert, uint8_t *in );
 void p2c_2bpp( uint8_t *outpix, int pixels_to_convert, uint8_t *in );
 
 void volatile (*scanline_renderer)(scanvideo_scanline_buffer_t *buffer);
-void vga_320200_4_planar(scanvideo_scanline_buffer_t *buffer);
-void vga_640200_2_planar(scanvideo_scanline_buffer_t *buffer);
-void vga_640480_4_planar(scanvideo_scanline_buffer_t *buffer);
+void vga_320_4p(scanvideo_scanline_buffer_t *buffer);
+void vga_640_2p(scanvideo_scanline_buffer_t *buffer);
+void vga_640_4p(scanvideo_scanline_buffer_t *buffer);
 void draw_test_pattern_stlow();
 void clear_screen();
 
@@ -51,7 +51,8 @@ static semaphore_t video_initted;
 static bool invert;
 static volatile uint dma_chan[2];
 static volatile bool doublebuf = false;
-static volatile uint8_t rez = 0;
+static volatile int rez = 0;
+static volatile int mode = 0;
 
 static struct scanvideo_mode *current_mode;
 
@@ -176,19 +177,16 @@ struct scanvideo_mode  vga_mode_640480 =
     .yscale = 1,
 };
 
-void setup_pixelpointers() {
-    
-    if( rez <= 2 ) {
-        uint32_t sz = X*Y*DEPTH/8;
+void setup_pixelpointers( int split ) {
+    uint32_t sz = X*Y*DEPTH/8;
 
+    if( split == 3 ) {
         assert( sz * 3 <= sizeof( pixels ) );
         pixin[0] = pixels;
         pixin[1] = pixels+sz;
         pixout = pixels + 2*sz;
     }
-    else if( rez == 4 || rez == 5 ) {
-        uint32_t sz = X*Y*DEPTH/8;
-
+    else if( split == 2 ) {
         assert( sz * 2 <= sizeof( pixels ) );
         pixin[0] = pixels;
         pixin[1] = NULL;
@@ -214,40 +212,72 @@ void parsecheck() {
         parsebuf(parsequeue[queueread]);
         parsequeue[queueread] = -1;
         queueread = (queueread+1) % QUEUELEN;
-    }
+}
 }
 
-void setup_resolution(int rez) {
-        switch( rez ) {
-            case(4):
-            case(5):
-                X = 640;
-                //Y = 464;
-                Y = 480;
-                DEPTH = 4;
-                scanline_renderer = &vga_640480_4_planar;
+void setup_resolution(int newrez, int newmode) {
+    rez = newrez;
+    mode = newmode;
+
+    int bufsplit = 2;
+    
+    if( rez == 3 && newmode != -1 ) {
+        
+        X = (newmode & 0x8) ? 640 : 320;
+        Y = (newmode & 0x100) ? 240 : 480;
+
+        switch( newmode & 0x7 ) {
+            case(3):
+                DEPTH = 8;
                 break;
             case(2):
+                DEPTH = 4;
+                scanline_renderer = (X == 320) ? vga_320_4p : vga_640_4p;
+                break;
+            case(1):
+                DEPTH = 2;
+                scanline_renderer = vga_640_2p;
+                break;
+            case(0):
+            default:
+                DEPTH = 0;
+                break;
+        }
+    }
+    else {
+        switch( rez ) {
+            case(0x4):
+                X = 640;
+                Y = 480;
+                DEPTH = 4;
+                scanline_renderer = &vga_640_4p;
+                break;
+            // ST modes
+            case(0x2):
                 X = 640;
                 Y = 400;
                 DEPTH = 1;
-                scanline_renderer = &vga_640480_4_planar;
+                scanline_renderer = &vga_640_4p;
+                bufsplit = 3;
                 break;
-            case(1):
+            case(0x1):
                 X = 640;
                 Y = 200;
                 DEPTH = 2;
-                scanline_renderer = &vga_640200_2_planar;
+                scanline_renderer = &vga_640_2p;
+                bufsplit = 3;
                 break;
-            case(0):
+            case(0x0):
             default:
                 X = 320;
                 Y = 200;
                 DEPTH = 4;
-                scanline_renderer = &vga_320200_4_planar;
+                scanline_renderer = &vga_320_4p;
+                bufsplit = 3;
                 break;
         }
-        setup_pixelpointers();
+    }
+    setup_pixelpointers(bufsplit);
 }
 
 int main(void) {
@@ -286,7 +316,7 @@ int main(void) {
     }
 
 
-    setup_resolution(rez);
+    setup_resolution(rez, -1);
     draw_test_pattern_stlow();
 
     // create a semaphore to be posted when video init is complete
@@ -489,8 +519,8 @@ void writemem( short bufinuse ) {
         return;
     }
     else if( (add == STRESSET) ) {
-        rez = datah & 0x7;
-        setup_resolution(rez);
+        rez = (datah & 0x7);
+        setup_resolution(rez,-1);
     }
     else if( (add & STPALMASK) == STPALETTE ) {
         uint32_t index = ( add - STPALETTE )>>1;
@@ -507,9 +537,9 @@ void writemem( short bufinuse ) {
         }
         return;
     }
-    else if( add == DDB1REG && low ) {
-        rez = datal & 1 ? 0x4 : 0x0;
-        setup_resolution(rez);
+    else if( add == DDB1REG && high && low ) {
+        int mode = datah << 8 | datal; // byte swap
+        setup_resolution(3,mode);
     }
 
 }
@@ -879,7 +909,7 @@ void core1_func() {
 
 }
 
-void vga_320200_4_planar(scanvideo_scanline_buffer_t *buffer) {
+void vga_320_4p(scanvideo_scanline_buffer_t *buffer) {
 
     uint line_num = scanvideo_scanline_number(buffer->scanline_id);
     uint16_t *p = (uint16_t *) buffer->data;
@@ -965,7 +995,7 @@ void vga_320200_4_planar(scanvideo_scanline_buffer_t *buffer) {
     buffer->status = SCANLINE_OK;
 }
 
-void vga_640200_2_planar(scanvideo_scanline_buffer_t *buffer) {
+void vga_640_2p(scanvideo_scanline_buffer_t *buffer) {
 
     uint line_num = scanvideo_scanline_number(buffer->scanline_id);
     uint16_t *p = (uint16_t *) buffer->data;
@@ -1021,7 +1051,7 @@ void vga_640200_2_planar(scanvideo_scanline_buffer_t *buffer) {
     buffer->status = SCANLINE_OK;
 }
 
-void vga_640480_4_planar(scanvideo_scanline_buffer_t *buffer) {
+void vga_640_4p(scanvideo_scanline_buffer_t *buffer) {
     uint line_num = scanvideo_scanline_number(buffer->scanline_id);
     uint16_t *p = (uint16_t *) buffer->data;
 
