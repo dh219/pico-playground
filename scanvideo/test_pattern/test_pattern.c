@@ -35,9 +35,12 @@ void p2c_4bpp( uint8_t *outpix, int pixels_to_convert, uint8_t *in );
 void p2c_2bpp( uint8_t *outpix, int pixels_to_convert, uint8_t *in );
 
 void volatile (*scanline_renderer)(scanvideo_scanline_buffer_t *buffer);
+
 void vga_320_4p(scanvideo_scanline_buffer_t *buffer);
-void vga_640_2p(scanvideo_scanline_buffer_t *buffer);
 void vga_640_4p(scanvideo_scanline_buffer_t *buffer);
+void vga_640_2p(scanvideo_scanline_buffer_t *buffer);
+void vga_640_1p(scanvideo_scanline_buffer_t *buffer);
+
 void draw_test_pattern_stlow();
 void clear_screen();
 
@@ -81,6 +84,7 @@ static volatile uint64_t _vbls = 0;
 static short X = 320;
 static short Y = 200;
 static short DEPTH = 4;
+static bool doubleline;
 //static uint8_t pixels[MAXX*MAXY*MAXDEPTH/8]; // ST resolutions are all the same (for now) // max 640*320 = 204800 bytes
 static uint8_t pixels[400000]; // ST resolutions are all the same (for now) // max 640*320 = 204800 bytes
 static uint8_t *pixout;
@@ -180,6 +184,11 @@ struct scanvideo_mode  vga_mode_640480 =
 void setup_pixelpointers( int split ) {
     uint32_t sz = X*Y*DEPTH/8;
 
+    // initial presumtion is no splitting
+    pixin[0] = pixels;
+    pixin[1] = pixels;
+    pixout = pixels;
+
     if( split == 3 ) {
         assert( sz * 3 <= sizeof( pixels ) );
         pixin[0] = pixels;
@@ -189,13 +198,14 @@ void setup_pixelpointers( int split ) {
     else if( split == 2 ) {
         assert( sz * 2 <= sizeof( pixels ) );
         pixin[0] = pixels;
-        pixin[1] = NULL;
-        pixout = pixels+sz;
-    }
-    else {
-        pixin[0] = pixels;
-        pixin[1] = pixels;
-        pixout = pixels;
+        if( DEPTH == 1 ) { // chunky 1bpp but double buffer support needed
+            pixin[1] = pixels+sz;
+            pixout = pixels; // may be overridden
+        }
+        else {
+            pixin[1] = NULL;
+            pixout = pixels+sz;
+        }
     }
 }
 
@@ -224,7 +234,8 @@ void setup_resolution(int newrez, int newmode) {
     if( rez == 3 && newmode != -1 ) {
         
         X = (newmode & 0x8) ? 640 : 320;
-        Y = (newmode & 0x100) ? 240 : 480;
+        doubleline = (newmode & 0x100);
+        Y = doubleline ? 240 : 480;
 
         switch( newmode & 0x7 ) {
             case(3):
@@ -232,15 +243,16 @@ void setup_resolution(int newrez, int newmode) {
                 break;
             case(2):
                 DEPTH = 4;
-                scanline_renderer = (X == 320) ? vga_320_4p : vga_640_4p;
+                scanline_renderer = (X == 320) ? &vga_320_4p : &vga_640_4p;
                 break;
             case(1):
                 DEPTH = 2;
-                scanline_renderer = vga_640_2p;
+                scanline_renderer = &vga_640_2p;
                 break;
             case(0):
             default:
-                DEPTH = 0;
+                DEPTH = 1;
+                scanline_renderer = &vga_640_1p;
                 break;
         }
     }
@@ -257,8 +269,8 @@ void setup_resolution(int newrez, int newmode) {
                 X = 640;
                 Y = 400;
                 DEPTH = 1;
-                scanline_renderer = &vga_640_4p;
-                bufsplit = 3;
+                scanline_renderer = &vga_640_1p;
+                bufsplit = 2;
                 break;
             case(0x1):
                 X = 640;
@@ -266,6 +278,7 @@ void setup_resolution(int newrez, int newmode) {
                 DEPTH = 2;
                 scanline_renderer = &vga_640_2p;
                 bufsplit = 3;
+                doubleline = true;
                 break;
             case(0x0):
             default:
@@ -274,6 +287,7 @@ void setup_resolution(int newrez, int newmode) {
                 DEPTH = 4;
                 scanline_renderer = &vga_320_4p;
                 bufsplit = 3;
+                doubleline = true;
                 break;
         }
     }
@@ -416,13 +430,14 @@ int main(void) {
         oldvbl = _vbls;
 
         uint8_t *src = pixin[0];
-        switch( rez ) {
+        switch( DEPTH ) {
+            case(0): // chunky
             case(1):
+                break;
+            case(2):
                 p2c_2bpp( pixout, X*Y, src );
                 break;
-            case(0):
             case(4):
-            case(5):
             default:
                 p2c_4bpp( pixout, X*Y, src );
                 break;
@@ -914,13 +929,16 @@ void vga_320_4p(scanvideo_scanline_buffer_t *buffer) {
     uint line_num = scanvideo_scanline_number(buffer->scanline_id);
     uint16_t *p = (uint16_t *) buffer->data;
 
-    uint linenum_virt = line_num / 2;
-    short REALX = X * 2;
+    uint linenum_virt = doubleline ? line_num / 2 : line_num;
+    short REALX = current_mode->width;
+    short REALY = current_mode->height;
 
-    linenum_virt -= (current_mode->height/2 - Y ) / 2;
+    if( Y <  REALY )
+        linenum_virt -= doubleline ? ( (REALY/2) - Y) / 2 : ( REALY - Y ) / 2;
+
     if( linenum_virt < 0 || linenum_virt >= Y ) { // blank
         *p++ = COMPOSABLE_COLOR_RUN;
-        *p++ = palette[0];
+        *p++ = 0x0000;
         *p++ = REALX - 3;
     }
     else {
@@ -996,13 +1014,18 @@ void vga_320_4p(scanvideo_scanline_buffer_t *buffer) {
 }
 
 void vga_640_2p(scanvideo_scanline_buffer_t *buffer) {
-
     uint line_num = scanvideo_scanline_number(buffer->scanline_id);
     uint16_t *p = (uint16_t *) buffer->data;
-    uint linenum_virt = line_num / 2;
 
-    linenum_virt -= (current_mode->height/2 - Y ) / 2;
-    if( linenum_virt < 0 || linenum_virt >= 200 ) { // blank
+    short REALX = current_mode->width;
+    short REALY = current_mode->height;
+
+    uint linenum_virt = doubleline ? line_num / 2 : line_num;
+
+    if( Y <  REALY )
+        linenum_virt -= doubleline ? ( (REALY/2) - Y ) / 2 : ( REALY - Y ) / 2;
+
+    if( linenum_virt < 0 || linenum_virt >= Y ) { // blank
         *p++ = COMPOSABLE_COLOR_RUN;
         //*p++ = doublebuf ? 0x0fff : 0x0000;
         *p++ = 0x0000;
@@ -1055,12 +1078,17 @@ void vga_640_4p(scanvideo_scanline_buffer_t *buffer) {
     uint line_num = scanvideo_scanline_number(buffer->scanline_id);
     uint16_t *p = (uint16_t *) buffer->data;
 
-    uint linenum_virt = line_num;
-    short REALX = X;
+    short REALX = current_mode->width;
+    short REALY = current_mode->height;
+
+    uint linenum_virt = doubleline ? line_num / 2 : line_num;
+
+    if( Y <  REALY )
+        linenum_virt -= doubleline ? ( (REALY/2) - Y ) / 2 : ( REALY - Y ) / 2;
 
     if( linenum_virt < 0 || linenum_virt >= Y ) { // blank
         *p++ = COMPOSABLE_COLOR_RUN;
-        *p++ = palette[2];
+        *p++ = 0x0000;
         *p++ = REALX - 3;
     }
     else {
@@ -1116,4 +1144,84 @@ void vga_640_4p(scanvideo_scanline_buffer_t *buffer) {
 
     buffer->data_used = ((uint32_t *) p) - buffer->data;
     buffer->status = SCANLINE_OK;    
+}
+
+void vga_640_1p(scanvideo_scanline_buffer_t *buffer) {
+    uint line_num = scanvideo_scanline_number(buffer->scanline_id);
+    uint16_t *p = (uint16_t *) buffer->data;
+
+    short REALX = current_mode->width;
+    short REALY = current_mode->height;
+
+    uint linenum_virt = doubleline ? line_num / 2 : line_num;
+
+    if( Y <  REALY )
+        linenum_virt -= doubleline ? ( (REALY/2) - Y ) / 2 : ( REALY - Y ) / 2;
+
+    if( linenum_virt < 0 || linenum_virt >= Y ) { // blank
+        *p++ = COMPOSABLE_COLOR_RUN;
+        *p++ = 0x0000;
+        *p++ = X - 3;
+    }
+    else {
+        uint32_t bitmap;
+        uint32_t *src = (uint32_t*)(pixout+(linenum_virt*X/8)); // 1bpp -- eight pix per byte
+
+        *p++ = COMPOSABLE_RAW_RUN;
+
+        for( int i = 0 ; i < X ; i += 32 ) {
+            bitmap = *src++;
+
+            uint16_t upper = bitmap >> 16;
+
+            *p++ = (bitmap & 128) ? 0 : 0x0fff;
+            if( i == 0 )
+                *p++ = X-3;
+            *p++ = (bitmap & 64) ? 0 : 0x0fff;
+            *p++ = (bitmap & 32) ? 0 : 0x0fff;
+            *p++ = (bitmap & 16) ? 0 : 0x0fff;
+            *p++ = (bitmap & 8) ? 0 : 0x0fff;
+            *p++ = (bitmap & 4) ? 0 : 0x0fff;
+            *p++ = (bitmap & 2) ? 0 : 0x0fff;
+            *p++ = (bitmap & 1) ? 0 : 0x0fff;
+
+            *p++ = (bitmap & 32768) ? 0 : 0x0fff;
+            *p++ = (bitmap & 16384) ? 0 : 0x0fff;
+            *p++ = (bitmap & 8192) ? 0 : 0x0fff;
+            *p++ = (bitmap & 4096) ? 0 : 0x0fff;
+            *p++ = (bitmap & 2048) ? 0 : 0x0fff;
+            *p++ = (bitmap & 1024) ? 0 : 0x0fff;
+            *p++ = (bitmap & 512) ? 0 : 0x0fff;
+            *p++ = (bitmap & 256) ? 0 : 0x0fff;
+
+            *p++ = (upper & 128) ? 0 : 0x0fff;
+            *p++ = (upper & 64) ? 0 : 0x0fff;
+            *p++ = (upper & 32) ? 0 : 0x0fff;
+            *p++ = (upper & 16) ? 0 : 0x0fff;
+            *p++ = (upper & 8) ? 0 : 0x0fff;
+            *p++ = (upper & 4) ? 0 : 0x0fff;
+            *p++ = (upper & 2) ? 0 : 0x0fff;
+            *p++ = (upper & 1) ? 0 : 0x0fff;
+
+            *p++ = (upper & 32768) ? 0 : 0x0fff;
+            *p++ = (upper & 16384) ? 0 : 0x0fff;
+            *p++ = (upper & 8192) ? 0 : 0x0fff;
+            *p++ = (upper & 4096) ? 0 : 0x0fff;
+            *p++ = (upper & 2048) ? 0 : 0x0fff;
+            *p++ = (upper & 1024) ? 0 : 0x0fff;
+            *p++ = (upper & 512) ? 0 : 0x0fff;
+            *p++ = (upper & 256) ? 0 : 0x0fff;
+
+        }
+    }
+
+    // black pixel to end line
+    *p++ = COMPOSABLE_RAW_1P;
+    *p++ = 0;
+    // end of line with alignment padding
+    *p++ = COMPOSABLE_EOL_SKIP_ALIGN;
+    *p++ = 0;
+
+    buffer->data_used = ((uint32_t *) p) - buffer->data;
+    buffer->status = SCANLINE_OK;
 }
