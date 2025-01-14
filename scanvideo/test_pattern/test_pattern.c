@@ -31,12 +31,16 @@
 void core1_func();
 static void dma_handler();
 void parsebuf( short );
+void p2c_8bpp( uint8_t *outpix, int pixels_to_convert, uint8_t *in );
 void p2c_4bpp( uint8_t *outpix, int pixels_to_convert, uint8_t *in );
 void p2c_2bpp( uint8_t *outpix, int pixels_to_convert, uint8_t *in );
 
 void volatile (*scanline_renderer)(scanvideo_scanline_buffer_t *buffer);
 
+void vga_320_8p(scanvideo_scanline_buffer_t *buffer);
 void vga_320_4p(scanvideo_scanline_buffer_t *buffer);
+
+void vga_640_8p(scanvideo_scanline_buffer_t *buffer);
 void vga_640_4p(scanvideo_scanline_buffer_t *buffer);
 void vga_640_2p(scanvideo_scanline_buffer_t *buffer);
 void vga_640_1p(scanvideo_scanline_buffer_t *buffer);
@@ -240,6 +244,10 @@ void setup_resolution(int newrez, int newmode) {
         switch( newmode & 0x7 ) {
             case(3):
                 DEPTH = 8;
+                X = 320;
+                Y = 240;
+                doubleline = true;
+                scanline_renderer = &vga_320_8p;
                 break;
             case(2):
                 DEPTH = 4;
@@ -437,6 +445,9 @@ int main(void) {
             case(2):
                 p2c_2bpp( pixout, X*Y, src );
                 break;
+            case(8):
+                p2c_8bpp( pixout, X*Y, src );
+                break;
             case(4):
             default:
                 p2c_4bpp( pixout, X*Y, src );
@@ -472,8 +483,12 @@ static int32_t rxdata[5];
 #define STPALETTE   0xff8240
 #define STPALMASK   0xffffc0
 
+#define FALPALETTE  0xff9800
+#define FALPALMASK  0xfffc00
+
 #define STRESSET    0xff8260
 #define DDB1REG     0xf1ddb0
+
 
 void writemem( short bufinuse ) {
     uint32_t add;
@@ -551,6 +566,22 @@ void writemem( short bufinuse ) {
             palette[index] |= ( red );
         }
         return;
+    }
+    else if( (add & FALPALMASK) == FALPALETTE && high && low ) {
+        uint32_t index = ( add - FALPALETTE ) >> 2;
+        if( add & 2 ) { // blue
+            uint16_t blue  = (datal) & 0xf0;
+            palette[index] &= 0x00ff;
+            palette[index] |= blue << 4;
+        }
+        else
+        { // red/green
+            uint16_t red   = datah >> 4;
+            uint16_t green  = datal >> 4;
+
+            palette[index] &= 0x0f00;
+            palette[index] |= (green<<4) | red;
+        }
     }
     else if( add == DDB1REG && high && low ) {
         int mode = datah << 8 | datal; // byte swap
@@ -764,6 +795,60 @@ void draw_test_pattern_stlow() {
     }
 }
 
+void p2c_8bpp( uint8_t *outpix, int pixels_to_convert, uint8_t *in ) {
+
+    uint8_t pix[16];
+    uint16_t *block = (void*)in;
+    uint16_t plane[8];
+
+    for( int pixel = 0 ; pixel < pixels_to_convert ; pixel += 16 ) {
+
+        if( pixel % 320  == 0 )
+            parsecheck();
+
+        plane[0] = *block++;
+        plane[1] = *block++;
+        plane[2] = *block++;
+        plane[3] = *block++;
+        plane[4] = *block++;
+        plane[5] = *block++;
+        plane[6] = *block++;
+        plane[7] = *block++;
+
+        // pixel 1 is the sum of the first bit of each of the (8) words raised by two each time
+        for( int i = 0 ; i < 16 ; i++ ) {
+            pix[15-i] =    ((( plane[0]>>i) & 0x1 ) << 0) | 
+                        ((( plane[1]>>i) & 0x1 ) << 1) |
+                        ((( plane[2]>>i) & 0x1 ) << 2) |
+                        ((( plane[3]>>i) & 0x1 ) << 3) |
+                        ((( plane[4]>>i) & 0x1 ) << 4) |
+                        ((( plane[5]>>i) & 0x1 ) << 5) |
+                        ((( plane[6]>>i) & 0x1 ) << 6) |
+                        ((( plane[7]>>i) & 0x1 ) << 7) ;
+        }
+
+        // this is where the bytewap happens
+
+        *(outpix++) = pix[8];
+        *(outpix++) = pix[9];
+        *(outpix++) = pix[10];
+        *(outpix++) = pix[11];
+        *(outpix++) = pix[12];
+        *(outpix++) = pix[13];
+        *(outpix++) = pix[14];
+        *(outpix++) = pix[15];
+
+        *(outpix++) = pix[0];
+        *(outpix++) = pix[1];
+        *(outpix++) = pix[2];
+        *(outpix++) = pix[3];
+        *(outpix++) = pix[4];
+        *(outpix++) = pix[5];
+        *(outpix++) = pix[6];
+        *(outpix++) = pix[7];
+    }    
+}
+
 void p2c_4bpp( uint8_t *outpix, int pixels_to_convert, uint8_t *in ) {
 
     uint8_t pix[16];
@@ -812,7 +897,6 @@ void p2c_2bpp( uint8_t *outpix, int pixels_to_convert, uint8_t *in ) {
         
         if( pixel % 640  == 0 )
             parsecheck();
-
         
         plane[0] = *block++;
         plane[1] = *block++;
@@ -1013,6 +1097,138 @@ void vga_320_4p(scanvideo_scanline_buffer_t *buffer) {
     buffer->status = SCANLINE_OK;
 }
 
+void vga_320_8p(scanvideo_scanline_buffer_t *buffer) {
+    uint line_num = scanvideo_scanline_number(buffer->scanline_id);
+    uint16_t *p = (uint16_t *) buffer->data;
+
+    short REALX = current_mode->width;
+    short REALY = current_mode->height;
+
+    uint linenum_virt = doubleline ? line_num / 2 : line_num;
+
+    if( Y <  REALY )
+        linenum_virt -= doubleline ? ( (REALY/2) - Y ) / 2 : ( REALY - Y ) / 2;
+
+    if( linenum_virt < 0 || linenum_virt >= Y ) { // blank
+        *p++ = COMPOSABLE_COLOR_RUN;
+        *p++ = 0x0000;
+        *p++ = REALX - 3;
+    }
+    else {
+        uint32_t colidx;
+        uint32_t *src = (uint32_t*)(pixout+(linenum_virt*X)); // 8bpp -- one pix per byte
+
+        *p++ = COMPOSABLE_RAW_RUN;
+        
+        for( int i = 0 ; i < X ; i+=4 ) {
+            colidx = *src++;
+            *p++ = palette[(colidx >> 0)&0xff];
+            if( i == 0 )
+                *p++ = REALX - 3;
+            *p++ = palette[(colidx >> 0)&0xff];
+ 
+            *p++ = palette[(colidx >> 8)&0xff];
+            *p++ = palette[(colidx >> 8)&0xff];
+ 
+            *p++ = palette[(colidx >> 16)&0xff];
+            *p++ = palette[(colidx >> 16)&0xff];
+ 
+            *p++ = palette[(colidx >> 24)&0xff];
+            *p++ = palette[(colidx >> 24)&0xff];
+        }
+    }
+
+    // black pixel to end line
+    *p++ = COMPOSABLE_RAW_1P;
+    *p++ = 0;
+    // end of line with alignment padding
+    *p++ = COMPOSABLE_EOL_SKIP_ALIGN;
+    *p++ = 0;
+
+    buffer->data_used = ((uint32_t *) p) - buffer->data;
+    buffer->status = SCANLINE_OK;    
+}
+
+void vga_640_1p(scanvideo_scanline_buffer_t *buffer) {
+    uint line_num = scanvideo_scanline_number(buffer->scanline_id);
+    uint16_t *p = (uint16_t *) buffer->data;
+
+    short REALX = current_mode->width;
+    short REALY = current_mode->height;
+
+    uint linenum_virt = doubleline ? line_num / 2 : line_num;
+
+    if( Y <  REALY )
+        linenum_virt -= doubleline ? ( (REALY/2) - Y ) / 2 : ( REALY - Y ) / 2;
+
+    if( linenum_virt < 0 || linenum_virt >= Y ) { // blank
+        *p++ = COMPOSABLE_COLOR_RUN;
+        *p++ = 0x0000;
+        *p++ = X - 3;
+    }
+    else {
+        uint32_t bitmap;
+        uint32_t *src = (uint32_t*)(pixout+(linenum_virt*X/8)); // 1bpp -- eight pix per byte
+
+        *p++ = COMPOSABLE_RAW_RUN;
+
+        for( int i = 0 ; i < X ; i += 32 ) {
+            bitmap = *src++;
+
+            uint16_t upper = bitmap >> 16;
+
+            *p++ = (bitmap & 128) ? 0 : 0x0fff;
+            if( i == 0 )
+                *p++ = X-3;
+            *p++ = (bitmap & 64) ? 0 : 0x0fff;
+            *p++ = (bitmap & 32) ? 0 : 0x0fff;
+            *p++ = (bitmap & 16) ? 0 : 0x0fff;
+            *p++ = (bitmap & 8) ? 0 : 0x0fff;
+            *p++ = (bitmap & 4) ? 0 : 0x0fff;
+            *p++ = (bitmap & 2) ? 0 : 0x0fff;
+            *p++ = (bitmap & 1) ? 0 : 0x0fff;
+
+            *p++ = (bitmap & 32768) ? 0 : 0x0fff;
+            *p++ = (bitmap & 16384) ? 0 : 0x0fff;
+            *p++ = (bitmap & 8192) ? 0 : 0x0fff;
+            *p++ = (bitmap & 4096) ? 0 : 0x0fff;
+            *p++ = (bitmap & 2048) ? 0 : 0x0fff;
+            *p++ = (bitmap & 1024) ? 0 : 0x0fff;
+            *p++ = (bitmap & 512) ? 0 : 0x0fff;
+            *p++ = (bitmap & 256) ? 0 : 0x0fff;
+
+            *p++ = (upper & 128) ? 0 : 0x0fff;
+            *p++ = (upper & 64) ? 0 : 0x0fff;
+            *p++ = (upper & 32) ? 0 : 0x0fff;
+            *p++ = (upper & 16) ? 0 : 0x0fff;
+            *p++ = (upper & 8) ? 0 : 0x0fff;
+            *p++ = (upper & 4) ? 0 : 0x0fff;
+            *p++ = (upper & 2) ? 0 : 0x0fff;
+            *p++ = (upper & 1) ? 0 : 0x0fff;
+
+            *p++ = (upper & 32768) ? 0 : 0x0fff;
+            *p++ = (upper & 16384) ? 0 : 0x0fff;
+            *p++ = (upper & 8192) ? 0 : 0x0fff;
+            *p++ = (upper & 4096) ? 0 : 0x0fff;
+            *p++ = (upper & 2048) ? 0 : 0x0fff;
+            *p++ = (upper & 1024) ? 0 : 0x0fff;
+            *p++ = (upper & 512) ? 0 : 0x0fff;
+            *p++ = (upper & 256) ? 0 : 0x0fff;
+
+        }
+    }
+
+    // black pixel to end line
+    *p++ = COMPOSABLE_RAW_1P;
+    *p++ = 0;
+    // end of line with alignment padding
+    *p++ = COMPOSABLE_EOL_SKIP_ALIGN;
+    *p++ = 0;
+
+    buffer->data_used = ((uint32_t *) p) - buffer->data;
+    buffer->status = SCANLINE_OK;
+}
+
 void vga_640_2p(scanvideo_scanline_buffer_t *buffer) {
     uint line_num = scanvideo_scanline_number(buffer->scanline_id);
     uint16_t *p = (uint16_t *) buffer->data;
@@ -1146,82 +1362,3 @@ void vga_640_4p(scanvideo_scanline_buffer_t *buffer) {
     buffer->status = SCANLINE_OK;    
 }
 
-void vga_640_1p(scanvideo_scanline_buffer_t *buffer) {
-    uint line_num = scanvideo_scanline_number(buffer->scanline_id);
-    uint16_t *p = (uint16_t *) buffer->data;
-
-    short REALX = current_mode->width;
-    short REALY = current_mode->height;
-
-    uint linenum_virt = doubleline ? line_num / 2 : line_num;
-
-    if( Y <  REALY )
-        linenum_virt -= doubleline ? ( (REALY/2) - Y ) / 2 : ( REALY - Y ) / 2;
-
-    if( linenum_virt < 0 || linenum_virt >= Y ) { // blank
-        *p++ = COMPOSABLE_COLOR_RUN;
-        *p++ = 0x0000;
-        *p++ = X - 3;
-    }
-    else {
-        uint32_t bitmap;
-        uint32_t *src = (uint32_t*)(pixout+(linenum_virt*X/8)); // 1bpp -- eight pix per byte
-
-        *p++ = COMPOSABLE_RAW_RUN;
-
-        for( int i = 0 ; i < X ; i += 32 ) {
-            bitmap = *src++;
-
-            uint16_t upper = bitmap >> 16;
-
-            *p++ = (bitmap & 128) ? 0 : 0x0fff;
-            if( i == 0 )
-                *p++ = X-3;
-            *p++ = (bitmap & 64) ? 0 : 0x0fff;
-            *p++ = (bitmap & 32) ? 0 : 0x0fff;
-            *p++ = (bitmap & 16) ? 0 : 0x0fff;
-            *p++ = (bitmap & 8) ? 0 : 0x0fff;
-            *p++ = (bitmap & 4) ? 0 : 0x0fff;
-            *p++ = (bitmap & 2) ? 0 : 0x0fff;
-            *p++ = (bitmap & 1) ? 0 : 0x0fff;
-
-            *p++ = (bitmap & 32768) ? 0 : 0x0fff;
-            *p++ = (bitmap & 16384) ? 0 : 0x0fff;
-            *p++ = (bitmap & 8192) ? 0 : 0x0fff;
-            *p++ = (bitmap & 4096) ? 0 : 0x0fff;
-            *p++ = (bitmap & 2048) ? 0 : 0x0fff;
-            *p++ = (bitmap & 1024) ? 0 : 0x0fff;
-            *p++ = (bitmap & 512) ? 0 : 0x0fff;
-            *p++ = (bitmap & 256) ? 0 : 0x0fff;
-
-            *p++ = (upper & 128) ? 0 : 0x0fff;
-            *p++ = (upper & 64) ? 0 : 0x0fff;
-            *p++ = (upper & 32) ? 0 : 0x0fff;
-            *p++ = (upper & 16) ? 0 : 0x0fff;
-            *p++ = (upper & 8) ? 0 : 0x0fff;
-            *p++ = (upper & 4) ? 0 : 0x0fff;
-            *p++ = (upper & 2) ? 0 : 0x0fff;
-            *p++ = (upper & 1) ? 0 : 0x0fff;
-
-            *p++ = (upper & 32768) ? 0 : 0x0fff;
-            *p++ = (upper & 16384) ? 0 : 0x0fff;
-            *p++ = (upper & 8192) ? 0 : 0x0fff;
-            *p++ = (upper & 4096) ? 0 : 0x0fff;
-            *p++ = (upper & 2048) ? 0 : 0x0fff;
-            *p++ = (upper & 1024) ? 0 : 0x0fff;
-            *p++ = (upper & 512) ? 0 : 0x0fff;
-            *p++ = (upper & 256) ? 0 : 0x0fff;
-
-        }
-    }
-
-    // black pixel to end line
-    *p++ = COMPOSABLE_RAW_1P;
-    *p++ = 0;
-    // end of line with alignment padding
-    *p++ = COMPOSABLE_EOL_SKIP_ALIGN;
-    *p++ = 0;
-
-    buffer->data_used = ((uint32_t *) p) - buffer->data;
-    buffer->status = SCANLINE_OK;
-}
