@@ -88,6 +88,7 @@ static volatile uint64_t _vbls = 0;
 static short X = 320;
 static short Y = 200;
 static short DEPTH = 4;
+static bool chunky = false;
 static bool doubleline;
 //static uint8_t pixels[MAXX*MAXY*MAXDEPTH/8]; // ST resolutions are all the same (for now) // max 640*320 = 204800 bytes
 static uint8_t pixels[400000]; // ST resolutions are all the same (for now) // max 640*320 = 204800 bytes
@@ -192,8 +193,13 @@ void setup_pixelpointers( int split ) {
     pixin[0] = pixels;
     pixin[1] = pixels;
     pixout = pixels;
-
-    if( split == 3 ) {
+ 
+    if( chunky || DEPTH == 1 ) { // allow double buf, but no need for p2c so we can ignore split
+        pixin[0] = pixels;
+        pixin[1] = pixels+sz;
+        pixout = pixin[0];
+    }
+    else if( split == 3 ) {
         assert( sz * 3 <= sizeof( pixels ) );
         pixin[0] = pixels;
         pixin[1] = pixels+sz;
@@ -202,14 +208,8 @@ void setup_pixelpointers( int split ) {
     else if( split == 2 ) {
         assert( sz * 2 <= sizeof( pixels ) );
         pixin[0] = pixels;
-        if( DEPTH == 1 ) { // chunky 1bpp but double buffer support needed
-            pixin[1] = pixels+sz;
-            pixout = pixels; // may be overridden
-        }
-        else {
-            pixin[1] = NULL;
-            pixout = pixels+sz;
-        }
+        pixin[1] = NULL;
+        pixout = pixels+sz;
     }
 }
 
@@ -259,7 +259,7 @@ void setup_resolution(int newrez, int newmode) {
                 break;
             case(0):
             default:
-                DEPTH = 1;
+                chunky = true; // even if false
                 scanline_renderer = &vga_640_1p;
                 break;
         }
@@ -437,21 +437,23 @@ int main(void) {
             continue;
         oldvbl = _vbls;
 
-        uint8_t *src = pixin[0];
-        switch( DEPTH ) {
-            case(0): // chunky
-            case(1):
-                break;
-            case(2):
-                p2c_2bpp( pixout, X*Y, src );
-                break;
-            case(8):
-                p2c_8bpp( pixout, X*Y, src );
-                break;
-            case(4):
-            default:
-                p2c_4bpp( pixout, X*Y, src );
-                break;
+        if( !chunky )  {
+            uint8_t *src = pixin[0];
+            switch( DEPTH ) {
+                case(0): // chunky
+                case(1):
+                    break;
+                case(2):
+                    p2c_2bpp( pixout, X*Y, src );
+                    break;
+                case(8):
+                    p2c_8bpp( pixout, X*Y, src );
+                    break;
+                case(4):
+                default:
+                    p2c_4bpp( pixout, X*Y, src );
+                    break;
+            }
         }
         if( screenreg != oldreg ) {
             for( int i = SCREENHIST-1 ; i >= 1 ; i-- )
@@ -488,6 +490,9 @@ static int32_t rxdata[5];
 
 #define STRESSET    0xff8260
 #define DDB1REG     0xf1ddb0
+
+#define DDB1REGX    0xf1ddb2
+#define CMD_CHUNKY  0x1
 
 
 void writemem( short bufinuse ) {
@@ -587,7 +592,12 @@ void writemem( short bufinuse ) {
         int mode = datah << 8 | datal; // byte swap
         setup_resolution(3,mode);
     }
-
+    else if( add == DDB1REGX && high && low ) {
+        if( datah & CMD_CHUNKY ) {
+            chunky = ( datal > 0 );
+            setup_resolution(rez,mode);
+        }
+    }
 }
 
 void parsebuf( short idx ) {
