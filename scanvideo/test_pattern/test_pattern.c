@@ -23,7 +23,7 @@
 
 
 #define PIO_INPUT_PIN_BASE 14
-#define NUMBUFS 4
+#define NUMBUFS 6
 #define CAPTUREDEPTH 2800
 #define CAPTUREBYTES (CAPTUREDEPTH*sizeof(uint32_t))
 
@@ -76,7 +76,7 @@ struct SCREENTIME {
 } screentimes[SCREENHIST];
 
 uint32_t screenreg = 0x78000;
-uint32_t screenbase = 0x78000;
+uint32_t screenbase[2] = {0x78000, 0x78000};
 
 static volatile uint64_t _vbls = 0;
 
@@ -424,7 +424,8 @@ int main(void) {
 */
     uint32_t oldreg = screenreg;
     uint64_t oldvbl = _vbls;
-    screenbase = screenreg; // seems to result in hangs half the time -- WTF? I don't think this is in use in interrupts or on the other core
+    screenbase[1] = screenbase[0];
+    screenbase[0] = screenreg;
 
     for(int i = 0 ; i < QUEUELEN ; i++)
         parsequeue[i] = -1;
@@ -471,7 +472,7 @@ int main(void) {
             doublebuf = false;
 #endif
 
-        screenbase  = screentimes[doublebuf?1:0].base;
+        screenbase[0]  = screentimes[doublebuf?1:0].base;
         oldreg = screenreg;
     }
 }
@@ -493,6 +494,7 @@ static int32_t rxdata[5];
 
 #define DDB1REGX    0xf1ddb2
 #define CMD_CHUNKY  0x1
+#define CMD_BUFFER  0x2
 
 
 void writemem( short bufinuse ) {
@@ -513,20 +515,22 @@ void writemem( short bufinuse ) {
 
     add = (rxdata[0] << 16)|(rxdata[1]<<8)|rxdata[2];
 
-    uint32_t screen_offset = add - screenbase;
-    if( add >= screenbase && screen_offset < X*Y * DEPTH/8 ) // within the screen
+    uint32_t screen_offset = add - screenbase[0];
+    if( add >= screenbase[0] && screen_offset < X*Y * DEPTH/8 ) // within the screen
     {
-#if 0
-        if( high && low && datah == 0x55 && datal == 0x55 ) {
-            pixin[0][screen_offset]     = 0x22 + bufinuse * 0x22;
-            pixin[0][screen_offset+1]   = 0x22 + bufinuse * 0x22;
-            return;
-        }
-#endif
         if( high )
             pixin[0][screen_offset] = datah;
         if( low )
             pixin[0][screen_offset+1] = datal;
+        return;
+    }
+    screen_offset = add - screenbase[1];
+    if( add >= screenbase[1] && screen_offset < X*Y * DEPTH/8 ) // within the screen
+    {
+        if( high )
+            pixin[1][screen_offset] = datah;
+        if( low )
+            pixin[1][screen_offset+1] = datal;
         return;
     }
 
@@ -555,6 +559,7 @@ void writemem( short bufinuse ) {
     }
     else if( (add == STRESSET) ) {
         rez = (datah & 0x7);
+        chunky = false;
         setup_resolution(rez,-1);
     }
     else if( (add & STPALMASK) == STPALETTE ) {
@@ -596,6 +601,12 @@ void writemem( short bufinuse ) {
         if( datah & CMD_CHUNKY ) {
             chunky = ( datal > 0 );
             setup_resolution(rez,mode);
+        }
+        if( datah & CMD_BUFFER && chunky ) {
+            if( datal != 0 )
+                pixout = pixin[1];
+            else
+                pixout = pixin[0];
         }
     }
 }
