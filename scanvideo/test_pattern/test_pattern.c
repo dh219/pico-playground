@@ -76,7 +76,7 @@ struct SCREENTIME {
 } screentimes[SCREENHIST];
 
 uint32_t screenreg = 0x78000;
-uint32_t screenbase[2] = {0x78000, 0x78000};
+uint32_t screenbase[2] = {0x78000, 0x70000};
 
 static volatile uint64_t _vbls = 0;
 
@@ -424,8 +424,8 @@ int main(void) {
 */
     uint32_t oldreg = screenreg;
     uint64_t oldvbl = _vbls;
-    screenbase[1] = screenbase[0];
-    screenbase[0] = screenreg;
+    //screenbase[1] = screenbase[0];
+    //screenbase[0] = screenreg;
 
     for(int i = 0 ; i < QUEUELEN ; i++)
         parsequeue[i] = -1;
@@ -456,6 +456,7 @@ int main(void) {
                     break;
             }
         }
+#if 0
         if( screenreg != oldreg ) {
             for( int i = SCREENHIST-1 ; i >= 1 ; i-- )
                 screentimes[i] = screentimes[i-1];
@@ -474,6 +475,7 @@ int main(void) {
 
         screenbase[0]  = screentimes[doublebuf?1:0].base;
         oldreg = screenreg;
+#endif
     }
 }
 
@@ -492,7 +494,10 @@ static int32_t rxdata[5];
 #define STRESSET    0xff8260
 #define DDB1REG     0xf1ddb0
 
-#define DDB1REGX    0xf1ddb2
+#define DDB1REGSCR  0x000300
+
+
+#define DDB1REGX    0x000302
 #define CMD_CHUNKY  0x1
 #define CMD_BUFFER  0x2
 
@@ -518,12 +523,14 @@ void writemem( short bufinuse ) {
     uint32_t screen_offset = add - screenbase[0];
     if( add >= screenbase[0] && screen_offset < X*Y * DEPTH/8 ) // within the screen
     {
+        uint8_t *dst = pixin[0];
         if( high )
-            pixin[0][screen_offset] = datah;
+            dst[screen_offset] = datah;
         if( low )
-            pixin[0][screen_offset+1] = datal;
+            dst[screen_offset+1] = datal;
         return;
     }
+    /*
     screen_offset = add - screenbase[1];
     if( add >= screenbase[1] && screen_offset < X*Y * DEPTH/8 ) // within the screen
     {
@@ -533,7 +540,7 @@ void writemem( short bufinuse ) {
             pixin[1][screen_offset+1] = datal;
         return;
     }
-
+    */
     if( rxdata[0] < 0xf0 )
         return;
 
@@ -555,6 +562,11 @@ void writemem( short bufinuse ) {
     else if( add == STVIDHIGH ) {
         screenreg &= 0x00ffff;
         screenreg |= ((uint32_t)datal)<<16;
+        return;
+    }
+    else if( add == DDB1REGSCR ) {
+        screenreg = ((uint32_t)datah)<<16 | ((uint32_t)datal)<<8 ; 
+        palette[0] = ~palette[0];
         return;
     }
     else if( (add == STRESSET) ) {
