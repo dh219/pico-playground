@@ -75,8 +75,8 @@ struct SCREENTIME {
     absolute_time_t t;
 } screentimes[SCREENHIST];
 
-uint32_t screenreg = 0x78000;
-uint32_t screenbase[2] = {0x78000, 0x70000};
+uint32_t screenreg = 0x0;
+uint32_t screenbase[2] = {0x0, 0x78000};
 
 static volatile uint64_t _vbls = 0;
 
@@ -193,7 +193,7 @@ void setup_pixelpointers( int split ) {
     pixin[0] = pixels;
     pixin[1] = pixels;
     pixout = pixels;
- 
+
     if( chunky || DEPTH == 1 ) { // allow double buf, but no need for p2c so we can ignore split
         pixin[0] = pixels;
         pixin[1] = pixels+sz;
@@ -303,7 +303,7 @@ void setup_resolution(int newrez, int newmode) {
 }
 
 int main(void) {
-    stdio_init_all();
+//    stdio_init_all();
 
     set_sys_clock_khz(250000, true);
 //    set_sys_clock_khz(200000, true);
@@ -456,6 +456,7 @@ int main(void) {
                     break;
             }
         }
+
 #if 0
         if( screenreg != oldreg ) {
             for( int i = SCREENHIST-1 ; i >= 1 ; i-- )
@@ -519,6 +520,14 @@ void writemem( short bufinuse ) {
     }
 
     add = (rxdata[0] << 16)|(rxdata[1]<<8)|rxdata[2];
+
+    if( add < X*Y*DEPTH/8 ) {
+        uint8_t *dst = pixin[0];
+        dst[add] = datah;
+        dst[add+1] = datal;
+    }
+
+    return;
 
     uint32_t screen_offset = add - screenbase[0];
     if( add >= screenbase[0] && screen_offset < X*Y * DEPTH/8 ) // within the screen
