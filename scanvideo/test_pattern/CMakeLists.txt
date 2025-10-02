@@ -6,14 +6,23 @@ if (TARGET pico_scanvideo_dpi)
             pico_generate_pio_header(test_pattern ${CMAKE_CURRENT_LIST_DIR}/multiplexed_input.pio)
 
     target_compile_definitions(test_pattern PRIVATE
-            #PSRAM_MUTEX=1
-            #PSRAM_SPINLOCK=1
-            PSRAM_ASYNC=1
-            PSRAM_PIN_CS=16
-            PSRAM_PIN_SCK=17
-            PSRAM_PIN_MOSI=18
-            PSRAM_PIN_MISO=19
-            PICO_SCANVIDEO_MAX_SCANLINE_BUFFER_WORDS=360
+                #PSRAM_MUTEX=1
+                #PSRAM_SPINLOCK=1
+                PSRAM_ASYNC=1
+                PSRAM_PIN_CS=16
+                PSRAM_PIN_SCK=17
+                PSRAM_PIN_MOSI=18
+                PSRAM_PIN_MISO=19
+                PICO_SCANVIDEO_MAX_SCANLINE_BUFFER_WORDS=360
+                PICO_SCANVIDEO_COLOR_PIN_BASE=0
+                PICO_SCANVIDEO_COLOR_PIN_COUNT=12
+                PICO_SCANVIDEO_PIXEL_RSHIFT=0
+                PICO_SCANVIDEO_PIXEL_GSHIFT=4
+                PICO_SCANVIDEO_PIXEL_BSHIFT=8
+                PICO_SCANVIDEO_PIXEL_RCOUNT=4
+                PICO_SCANVIDEO_PIXEL_GCOUNT=4
+                PICO_SCANVIDEO_PIXEL_BCOUNT=4
+                PICO_SCANVIDEO_SYNC_PIN_BASE=12
     )
         
     target_link_libraries(test_pattern PRIVATE
@@ -26,7 +35,7 @@ if (TARGET pico_scanvideo_dpi)
     pico_add_extra_outputs(test_pattern)
 
     pico_enable_stdio_uart(test_pattern 0)
-    pico_enable_stdio_usb(test_pattern 0)
+    pico_enable_stdio_usb(test_pattern 1)
 
     #add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/rp2040-psram rp2040-psram)
 

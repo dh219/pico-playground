@@ -24,8 +24,10 @@
 
 #define PIO_INPUT_PIN_BASE 14
 #define NUMBUFS 6
-#define CAPTUREDEPTH 2800
-#define CAPTUREBYTES (CAPTUREDEPTH*sizeof(uint32_t))
+#define CAPTUREDEPTH 1600
+//#define CAPTUREDEPTH 2800
+//#define CAPTUREDEPTH 2048
+#define CAPTUREBYTES (CAPTUREDEPTH*sizeof(uint16_t))
 
 
 void core1_func();
@@ -76,7 +78,7 @@ struct SCREENTIME {
 } screentimes[SCREENHIST];
 
 uint32_t screenreg = 0x0;
-uint32_t screenbase[2] = {0x0, 0x78000};
+uint32_t screenbase[2] = {0x78000,0xf20000};
 
 static volatile uint64_t _vbls = 0;
 
@@ -95,7 +97,7 @@ static uint8_t pixels[400000]; // ST resolutions are all the same (for now) // m
 static uint8_t *pixout;
 static uint8_t *pixin[2];
 
-uint32_t *capture_buf[NUMBUFS];
+uint16_t *capture_buf[NUMBUFS];
 static volatile unsigned short dmabufidx[2];
 
 static const uint16_t def_palette[256] = {
@@ -156,6 +158,52 @@ struct scanvideo_timing vga_timing_640x480_60_local =
 
     .enable_den = 0
 };
+
+struct scanvideo_timing vga_timing_640x480_50_local =
+{
+    .clock_freq = 25000000,
+
+    .h_active = 640,
+    .v_active = 480,
+
+    .h_front_porch = 16,
+    .h_pulse = 64,
+    .h_total = 800,
+    .h_sync_polarity = 1,
+
+    .v_front_porch = 1,
+    .v_pulse = 107,
+    .v_total = 630,
+    .v_sync_polarity = 1,
+
+    .enable_clock = 0,
+    .clock_polarity = 0,
+
+    .enable_den = 0
+};
+struct scanvideo_timing vga_timing_pal_local =
+{
+    .clock_freq = 25000000,
+
+    .h_active = 640,
+    .v_active = 256,
+
+    .h_front_porch = 16,
+    .h_pulse = 64,
+    .h_total = 1600,
+    .h_sync_polarity = 1,
+
+    .v_front_porch = 1,
+    .v_pulse = 107,
+    .v_total = 628,
+    .v_sync_polarity = 1,
+
+    .enable_clock = 0,
+    .clock_polarity = 0,
+
+    .enable_den = 0
+};
+
 
 extern const struct scanvideo_pio_program video_24mhz_composable;
 struct scanvideo_mode  vga_mode_320240 =
@@ -226,7 +274,7 @@ void parsecheck() {
         parsebuf(parsequeue[queueread]);
         parsequeue[queueread] = -1;
         queueread = (queueread+1) % QUEUELEN;
-}
+    }
 }
 
 void setup_resolution(int newrez, int newmode) {
@@ -303,19 +351,32 @@ void setup_resolution(int newrez, int newmode) {
 }
 
 int main(void) {
-//    stdio_init_all();
+    stdio_init_all();
 
     set_sys_clock_khz(250000, true);
-//    set_sys_clock_khz(200000, true);
+//    set_sys_clock_khz(250000, true);
+
+    sleep_ms(4000);
 
     puts("initialising...\n");
+
+    printf("PICO_SCANVIDEO_COLOR_PIN_BASE: %d\n", PICO_SCANVIDEO_COLOR_PIN_BASE);
+    printf("PICO_SCANVIDEO_COLOR_PIN_COUNT: %d\n", PICO_SCANVIDEO_COLOR_PIN_COUNT);
+    printf("PICO_SCANVIDEO_PIXEL_RSHIFT: %d\n", PICO_SCANVIDEO_PIXEL_RSHIFT);
+    printf("PICO_SCANVIDEO_PIXEL_GSHIFT: %d\n", PICO_SCANVIDEO_PIXEL_GSHIFT);
+    printf("PICO_SCANVIDEO_PIXEL_BSHIFT: %d\n", PICO_SCANVIDEO_PIXEL_BSHIFT);
+    printf("PICO_SCANVIDEO_PIXEL_RCOUNT: %d\n", PICO_SCANVIDEO_PIXEL_RCOUNT);
+    printf("PICO_SCANVIDEO_PIXEL_GCOUNT: %d\n", PICO_SCANVIDEO_PIXEL_GCOUNT);
+    printf("PICO_SCANVIDEO_PIXEL_BCOUNT: %d\n", PICO_SCANVIDEO_PIXEL_BCOUNT);
+    printf("PICO_SCANVIDEO_SYNC_PIN_BASE: %d\n", PICO_SCANVIDEO_SYNC_PIN_BASE);
+  
 
     for(int i = 0 ; i < QUEUELEN ; i++)
         parsequeue[i] = -1;
 
     /* DMA */
     for( int i = 0 ; i < NUMBUFS ; i++ ) {
-        capture_buf[i] = malloc(CAPTUREBYTES);
+        capture_buf[i] = calloc(CAPTUREBYTES,1);
         hard_assert(capture_buf[i]);
     }
 
@@ -383,6 +444,7 @@ int main(void) {
 //    channel_config_set_ring (&dma_config[0], true, 5);
     channel_config_set_chain_to(&dma_config[0], dma_chan[1]);
     // Tell the DMA to raise IRQ line 1 when the channel finishes a block
+    channel_config_set_transfer_data_size(&dma_config[0], DMA_SIZE_16);
     dma_channel_set_irq1_enabled(dma_chan[0], true);
 
     dmabufidx[0] = nextbuf();
@@ -401,6 +463,7 @@ int main(void) {
     channel_config_set_dreq(&dma_config[1], pio_get_dreq(pio, sm, false));
 //    channel_config_set_ring (&dma_config[1], true, 5);
     channel_config_set_chain_to(&dma_config[1], dma_chan[0]);
+    channel_config_set_transfer_data_size(&dma_config[1], DMA_SIZE_16);
     dma_channel_set_irq1_enabled(dma_chan[1], true);
 
     dmabufidx[1] = nextbuf();
@@ -415,13 +478,13 @@ int main(void) {
     irq_set_exclusive_handler(DMA_IRQ_1, dma_handler);
     irq_set_enabled(DMA_IRQ_1, true);
 
-/*
+
     printf( "red =   %4.4x\n", PICO_SCANVIDEO_PIXEL_FROM_RGB5(0xf, 0x0, 0x0) );
     printf( "green = %4.4x\n", PICO_SCANVIDEO_PIXEL_FROM_RGB5(0x0, 0xf, 0x0) );
     printf( "blue =  %4.4x\n", PICO_SCANVIDEO_PIXEL_FROM_RGB5(0x0, 0x0, 0xf) );
 
     printf("Listening...\n");
-*/
+
     uint32_t oldreg = screenreg;
     uint64_t oldvbl = _vbls;
     //screenbase[1] = screenbase[0];
@@ -521,25 +584,37 @@ void writemem( short bufinuse ) {
 
     add = (rxdata[0] << 16)|(rxdata[1]<<8)|rxdata[2];
 
+//    if( add > 0x10000 && add < 0xf00000 )
+//        printf("%p = %x %x\n", add, high ? datah : -1, low ? datal : -1 );
+
+
+    /*
     if( add < X*Y*DEPTH/8 ) {
         uint8_t *dst = pixin[0];
         dst[add] = datah;
         dst[add+1] = datal;
     }
+    return;*/
+/*
+    if( datah == 0x8a && datal == 0xaa ) { // magic number
+        uint8_t *dst = pixin[0];
+        printf("screen[%4.4x]: %2.2x %2.2x\n", add, dst[add], dst[add+1] );
+    }
+*/
 
-    return;
-
-    uint32_t screen_offset = add - screenbase[0];
-    if( add >= screenbase[0] && screen_offset < X*Y * DEPTH/8 ) // within the screen
+    uint32_t screen_offset;
+    if( add >= screenbase[0] && (screen_offset = add - screenbase[0]) < X*Y * DEPTH/8 ) // within the screen
     {
         uint8_t *dst = pixin[0];
         if( high )
             dst[screen_offset] = datah;
         if( low )
             dst[screen_offset+1] = datal;
+        
         return;
     }
-    /*
+
+/*
     screen_offset = add - screenbase[1];
     if( add >= screenbase[1] && screen_offset < X*Y * DEPTH/8 ) // within the screen
     {
@@ -552,6 +627,8 @@ void writemem( short bufinuse ) {
     */
     if( rxdata[0] < 0xf0 )
         return;
+
+
 
 #ifdef STE
     // breaks on my -FM. perhaps normal given this is an STE register. Assumed it wasn't used.
@@ -633,14 +710,30 @@ void writemem( short bufinuse ) {
 }
 
 void parsebuf( short idx ) {
-    uint32_t* ptr = capture_buf[idx];
 
-    uint32_t type;
-    uint32_t data;
+    uint16_t* ptr = capture_buf[idx];
+
+    uint16_t tmp[CAPTUREDEPTH];
+    memcpy( tmp, ptr, CAPTUREBYTES );
+    memset( ptr, 0, CAPTUREBYTES );
+    ptr = tmp;
+
+    uint16_t type;
+    uint16_t data;
+
+    uint16_t oldtype = 0;
+
+
+    bool startvalid = false;
 
     for( uint l = 0 ; l < CAPTUREDEPTH ; l++ ) {
+/*
+        if( l % 16 == 1 )
+            printf("\n");
+        printf("%8.8x ", (*ptr));
+*/  
 
-#if 1
+#if 0
         for( uint hl = 0 ; hl < 2 ; hl++ ) 
         {
             if( hl == 1 ) {
@@ -655,7 +748,24 @@ void parsebuf( short idx ) {
         {
             type = ((*ptr)>>12)&0x7; 
             data = ((*ptr))&0xff; 
+//            printf("type = %x, data = %x\n", type, data);
+
 #endif            
+            /* loop here discarding anything until we get an 01? */
+     /*       if( !startvalid && type != 1 ) {
+                ptr++;
+                continue;
+            }*/
+            startvalid = true;
+
+/*
+            if( type < oldtype ) { // problem in the order
+                printf("Type order fault (%d < %d)\n", type, oldtype );
+            }
+            oldtype = type;
+
+            printf("%d: %2.2x\n", type, data);
+*/
             switch( type ) {
                 case(1):
                     rxdata[0] = data;
@@ -676,10 +786,12 @@ void parsebuf( short idx ) {
                 case(5):
                     rxdata[3] = data;
                     writemem(idx);
+                    oldtype = 0;
                     break;
                 case(6):
                     rxdata[4] = data;
                     writemem(idx);
+                    oldtype = 0;
                     break;
                 default:
                     break;        
@@ -709,7 +821,6 @@ static void dma_handler() {
     if (dma_hw->ints1 & 1u << dma_chan[0]) {
         // Clear the interrupt request.
 //        dma_hw->ints1 = 1u << dma_chan[0];
-        dma_channel_acknowledge_irq1( dma_chan[0] );
 
         // reset chan 1 write address for next time
         oldbuf = dmabufidx[0];
@@ -719,12 +830,12 @@ static void dma_handler() {
         //parsebuf(oldbuf);
         parsequeue[queuewrite] = oldbuf;
         queuewrite = (queuewrite+1) % QUEUELEN;
+        dma_channel_acknowledge_irq1( dma_chan[0] );
     }
     // DMA chan 2.
     else if (dma_hw->ints1 & 1u << dma_chan[1]) {
         // Clear the interrupt request.
 //        dma_hw->ints1 = 1u << dma_chan[1];
-        dma_channel_acknowledge_irq1( dma_chan[1] );
 
         // reset chan 2 write address for next time
         oldbuf = dmabufidx[1];
@@ -734,6 +845,7 @@ static void dma_handler() {
         //parsebuf(oldbuf);
         parsequeue[queuewrite] = oldbuf;
         queuewrite = (queuewrite+1) % QUEUELEN;
+        dma_channel_acknowledge_irq1( dma_chan[1] );
   }
 }
 #endif
@@ -845,8 +957,8 @@ void p2c_8bpp( uint8_t *outpix, int pixels_to_convert, uint8_t *in ) {
 
     for( int pixel = 0 ; pixel < pixels_to_convert ; pixel += 16 ) {
 
-        if( pixel % 320  == 0 )
-            parsecheck();
+//        if( pixel % 320  == 0 )
+//            parsecheck();
 
         plane[0] = *block++;
         plane[1] = *block++;
@@ -899,8 +1011,8 @@ void p2c_4bpp( uint8_t *outpix, int pixels_to_convert, uint8_t *in ) {
 
     for( int pixel = 0 ; pixel < pixels_to_convert ; pixel += 16 ) {
 
-        if( pixel % 320  == 0 )
-            parsecheck();
+//        if( pixel % 320  == 0 )
+//            parsecheck();
 
         plane[0] = *block++;
         plane[1] = *block++;
@@ -937,8 +1049,8 @@ void p2c_2bpp( uint8_t *outpix, int pixels_to_convert, uint8_t *in ) {
 
     for( int pixel = 0 ; pixel < pixels_to_convert ; pixel += 16 ) {
         
-        if( pixel % 640  == 0 )
-            parsecheck();
+//        if( pixel % 640  == 0 )
+//            parsecheck();
         
         plane[0] = *block++;
         plane[1] = *block++;
