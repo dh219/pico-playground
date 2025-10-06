@@ -23,8 +23,9 @@
 
 
 #define PIO_INPUT_PIN_BASE 14
-#define NUMBUFS 6
-#define CAPTUREDEPTH 1600
+#define NUMBUFS 10
+#define CAPTUREDEPTH 1024
+//#define CAPTUREDEPTH 1600
 //#define CAPTUREDEPTH 2800
 //#define CAPTUREDEPTH 2048
 #define CAPTUREBYTES (CAPTUREDEPTH*sizeof(uint16_t))
@@ -266,11 +267,13 @@ uint nextbuf(){
     uint newbuf;
     newbuf = (lastallocatedbuf + 1) % NUMBUFS;
     lastallocatedbuf = newbuf;
+//    printf("Newbuf=%d\n", newbuf);
     return newbuf;
 }
 
 void parsecheck() {
     while( parsequeue[queueread] >= 0 ) {
+//        printf("Parsebuf=%d\n", parsequeue[queueread] );
         parsebuf(parsequeue[queueread]);
         parsequeue[queueread] = -1;
         queueread = (queueread+1) % QUEUELEN;
@@ -584,10 +587,6 @@ void writemem( short bufinuse ) {
 
     add = (rxdata[0] << 16)|(rxdata[1]<<8)|rxdata[2];
 
-//    if( add > 0x10000 && add < 0xf00000 )
-//        printf("%p = %x %x\n", add, high ? datah : -1, low ? datal : -1 );
-
-
     /*
     if( add < X*Y*DEPTH/8 ) {
         uint8_t *dst = pixin[0];
@@ -596,10 +595,11 @@ void writemem( short bufinuse ) {
     }
     return;*/
 /*
-    if( datah == 0x8a && datal == 0xaa ) { // magic number
-        uint8_t *dst = pixin[0];
-        printf("screen[%4.4x]: %2.2x %2.2x\n", add, dst[add], dst[add+1] );
-    }
+    if( add > 0x78600 && add < 0x80000 
+//        && ( ( datah != 0x0 && datah != 0x55 & datah != 0xaa ) ||  ( datal != 0x0 && datal != 0x55 & datal != 0xaa ) )
+//        && ( ( datah != 0xff ) ||  ( datal != 0x0 ) )
+    )
+        printf("%p = %x %x\n", add, datah, datal );
 */
 
     uint32_t screen_offset;
@@ -752,10 +752,10 @@ void parsebuf( short idx ) {
 
 #endif            
             /* loop here discarding anything until we get an 01? */
-     /*       if( !startvalid && type != 1 ) {
+            if( !startvalid && type != 1 ) {
                 ptr++;
                 continue;
-            }*/
+            }
             startvalid = true;
 
 /*
